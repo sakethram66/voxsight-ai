@@ -124,7 +124,7 @@ def test_factory_registers_configured_providers_without_exposing_keys(caplog):
 
 def test_factory_requires_key_for_manual_provider():
     with pytest.raises(ProviderError, match="GROQ_API_KEY"):
-        get_provider(Settings(provider="groq"))
+        get_provider(Settings(provider="groq", groq_api_key=""))
 
 
 def test_web_search_tool_is_hidden_for_provider_without_grounding():

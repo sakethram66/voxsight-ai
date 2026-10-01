@@ -2,7 +2,7 @@
   "name": "voxsight-ui",
   "private": true,
   "type": "module",
-  "scripts": { "dev": "vite", "build": "vite build", "test": "node --test src/lib/speech.test.mjs" },
+  "scripts": { "dev": "vite", "build": "vite build", "test": "node --test src/lib/speech.test.mjs src/lib/voice.test.mjs" },
   "dependencies": { "react": "^18.3.1", "react-dom": "^18.3.1" },
   "devDependencies": { "@vitejs/plugin-react": "^4.3.1", "vite": "^5.4.0" }
 }

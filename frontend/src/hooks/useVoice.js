@@ -1,145 +1,225 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { SentenceChunker, stripWake } from "../lib/speech.js";
+import { SentenceChunker } from "../lib/speech.js";
+import {
+  SpeechRecognitionController,
+  chooseSpeechVoice,
+  getSpeechRecognition,
+  microphoneErrorMessage,
+  recognitionUnavailableMessage,
+  shouldAutoSpeak,
+} from "../lib/voice.js";
 
-const SR = typeof window !== "undefined" ? window.SpeechRecognition || window.webkitSpeechRecognition : null;
 const TTS = typeof window !== "undefined" && "speechSynthesis" in window;
+const SR = typeof window !== "undefined" ? getSpeechRecognition(window) : null;
 
-function micMessage(e) {
-  if (!navigator.mediaDevices) return "Microphone access needs HTTPS or localhost.";
-  if (e.name === "NotAllowedError") return "Microphone permission denied. Click the lock icon in the address bar, allow the microphone, then try again.";
-  if (e.name === "NotFoundError") return "No microphone found.";
-  return `Microphone error: ${e.message}`;
-}
-
-/** Browser STT (Web Speech API) + TTS (speechSynthesis) with sentence-level streaming playback and barge-in. */
+/** Browser Web Speech recognition + speech synthesis with a real microphone analyser. */
 export function useVoice({ settings, onFinal, onError, onBargeIn }) {
-  const [listening, setListening] = useState(false);
+  const [state, setState] = useState("ready");
   const [interim, setInterim] = useState("");
   const [speaking, setSpeaking] = useState(false);
   const [analyser, setAnalyser] = useState(null);
   const [voices, setVoices] = useState([]);
-  const cb = useRef({});
-  cb.current = { settings, onFinal, onError, onBargeIn };
-  const rec = useRef(null), want = useRef(false), mic = useRef(null), ctx = useRef(null);
-  const pending = useRef(0), gen = useRef(0), chunker = useRef(new SentenceChunker());
-  const barged = useRef(false);
+  const [error, setError] = useState("");
+  const callbacks = useRef({});
+  callbacks.current = { settings, onFinal, onError, onBargeIn };
+  const microphone = useRef(null), audioContext = useRef(null), controller = useRef(null);
+  const pendingSpeech = useRef(0), speechGeneration = useRef(0), chunker = useRef(new SentenceChunker());
+  const bargedIn = useRef(false), starting = useRef(false);
+  const startGeneration = useRef(0);
 
-  useEffect(() => {
-    if (!TTS) return;
-    const load = () => setVoices(speechSynthesis.getVoices());
-    load();
-    speechSynthesis.addEventListener("voiceschanged", load);
-    return () => speechSynthesis.removeEventListener("voiceschanged", load);
-  }, []);
-
-  // ---------- TTS ----------
-  const say = useCallback((text) => {
-    const s = cb.current.settings;
-    if (!TTS || !s.tts || !text) return;
-    const u = new SpeechSynthesisUtterance(text);
-    const vs = speechSynthesis.getVoices(), base = (s.lang || "en").slice(0, 2);
-    const v = vs.find((x) => x.voiceURI === s.voiceURI) || vs.find((x) => x.lang === s.lang) || vs.find((x) => x.lang.startsWith(base));
-    if (v) { u.voice = v; u.lang = v.lang; } else u.lang = s.lang;
-    u.rate = s.rate;
-    const g = gen.current;
-    pending.current++;
-    setSpeaking(true);
-    const fin = () => {
-      if (g !== gen.current) return; // cancelled utterance
-      pending.current = Math.max(0, pending.current - 1);
-      if (pending.current === 0) setSpeaking(false);
-    };
-    u.onend = fin; u.onerror = fin;
-    speechSynthesis.speak(u);
-  }, []);
-
-  const cancelSpeech = useCallback(() => {
-    gen.current++; pending.current = 0;
-    chunker.current.reset();
-    if (TTS) speechSynthesis.cancel();
-    setSpeaking(false);
-  }, []);
-
-  const beginReply = useCallback(() => { chunker.current.reset(); }, []);
-  const feed = useCallback((d) => chunker.current.push(d).forEach(say), [say]);
-  const endReply = useCallback(() => chunker.current.flush().forEach(say), [say]);
-  const speakNow = useCallback((t) => { cancelSpeech(); say(t); }, [cancelSpeech, say]);
-
-  // ---------- microphone level (for the waveform) ----------
-  const ensureMic = async () => {
-    if (mic.current) return;
-    if (!navigator.mediaDevices?.getUserMedia) throw Object.assign(new Error("no mediaDevices"), { name: "Insecure" });
-    mic.current = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-    const AC = window.AudioContext || window.webkitAudioContext;
-    ctx.current = new AC();
-    const node = ctx.current.createAnalyser();
-    node.fftSize = 256;
-    ctx.current.createMediaStreamSource(mic.current).connect(node);
-    setAnalyser(node);
-  };
-  const releaseMic = () => {
-    mic.current?.getTracks().forEach((t) => t.stop());
-    ctx.current?.close().catch(() => {});
-    mic.current = ctx.current = null;
+  const releaseMicrophone = () => {
+    microphone.current?.getTracks().forEach((track) => track.stop());
+    audioContext.current?.close().catch(() => {});
+    microphone.current = audioContext.current = null;
+    controller.current?.setAudioMonitoring(false);
     setAnalyser(null);
   };
 
-  // ---------- STT ----------
-  const start = useCallback(async ({ keepSpeech = false } = {}) => {
-    if (!SR) { cb.current.onError("Speech recognition isn't supported in this browser. Use Chrome, Edge or Safari, or type instead."); return; }
-    if (rec.current) return;
-    if (!keepSpeech) cancelSpeech(); // tapping the mic interrupts the assistant
-    want.current = true;
-    try { await ensureMic(); } catch (e) { want.current = false; cb.current.onError(micMessage(e)); return; }
-    if (!want.current || rec.current) return;
-    const r = new SR();
-    r.lang = cb.current.settings.lang; r.interimResults = true; r.continuous = false; r.maxAlternatives = 1;
-    let finalText = "";
-    barged.current = false;
-    r.onstart = () => setListening(true);
-    r.onresult = (e) => {
-      let live = "";
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const res = e.results[i];
-        if (res.isFinal) finalText += res[0].transcript; else live += res[0].transcript;
-      }
-      const heard = (finalText + live).trim();
-      setInterim(heard);
-      // Barge-in (hands-free): the user talks over the assistant -> stop speaking and generating.
-      if (cb.current.settings.handsFree && pending.current > 0 && !barged.current && heard.split(/\s+/).length >= 2) {
-        barged.current = true;
-        cancelSpeech();
-        cb.current.onBargeIn?.();
-      }
-    };
-    r.onerror = (e) => {
-      if (e.error === "no-speech" || e.error === "aborted") return;
-      if (e.error === "not-allowed" || e.error === "service-not-allowed") { want.current = false; cb.current.onError("Microphone permission denied for speech recognition."); }
-      else if (e.error === "audio-capture") { want.current = false; cb.current.onError("No microphone found."); }
-      else if (e.error === "network") cb.current.onError("Speech recognition needs a network connection (Chrome sends audio to Google's speech service).");
-      else cb.current.onError(`Speech recognition error: ${e.error}`);
-    };
-    r.onend = () => {
-      rec.current = null;
-      setListening(false); setInterim("");
-      const text = stripWake(finalText.trim());
-      if (text) cb.current.onFinal(text);
-      if (want.current && cb.current.settings.handsFree) setTimeout(() => start({ keepSpeech: true }), 250);
-      else { want.current = false; releaseMic(); }
-    };
-    rec.current = r;
-    try { r.start(); } catch { rec.current = null; }
-  }, [cancelSpeech]); // eslint-disable-line react-hooks/exhaustive-deps
+  const ensureMicrophone = async () => {
+    if (microphone.current) return;
+    if (!navigator.mediaDevices?.getUserMedia) throw Object.assign(new Error("getUserMedia unavailable"), { name: "Insecure" });
+    microphone.current = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    try {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) return;
+      audioContext.current = new AudioContextClass();
+      if (audioContext.current.state === "suspended") await audioContext.current.resume().catch(() => {});
+      const meter = audioContext.current.createAnalyser();
+      meter.fftSize = 256;
+      audioContext.current.createMediaStreamSource(microphone.current).connect(meter);
+      setAnalyser(meter);
+    } catch (error) {
+      console.debug("Microphone level meter unavailable", error);
+      audioContext.current?.close().catch(() => {});
+      audioContext.current = null;
+      setAnalyser(null);
+    }
+  };
 
-  const stop = useCallback(() => {
-    want.current = false;
-    rec.current?.abort();
-    releaseMic();
-    setListening(false); setInterim("");
+  const cancelSpeech = useCallback(() => {
+    speechGeneration.current++;
+    pendingSpeech.current = 0;
+    chunker.current.reset();
+    if (TTS) window.speechSynthesis.cancel();
+    setSpeaking(false);
+    controller.current?.setSpeaking(false);
   }, []);
 
-  useEffect(() => () => { want.current = false; rec.current?.abort(); releaseMic(); if (TTS) speechSynthesis.cancel(); }, []);
+  const say = useCallback((text) => {
+    const current = callbacks.current.settings;
+    if (!TTS || !shouldAutoSpeak(current) || !text) return;
+    const utterance = new SpeechSynthesisUtterance(text);
+    const voice = chooseSpeechVoice(window.speechSynthesis.getVoices(), current.lang, current.voiceURI);
+    utterance.lang = current.lang;
+    if (voice) utterance.voice = voice;
+    utterance.rate = current.rate;
+    utterance.volume = current.volume ?? 1;
+    const generation = speechGeneration.current;
+    pendingSpeech.current++;
+    setSpeaking(true);
+    controller.current?.setSpeaking(true);
+    const finish = () => {
+      if (generation !== speechGeneration.current) return;
+      pendingSpeech.current = Math.max(0, pendingSpeech.current - 1);
+      if (pendingSpeech.current === 0) {
+        setSpeaking(false);
+        controller.current?.setSpeaking(false);
+      }
+    };
+    utterance.onend = finish;
+    utterance.onerror = (event) => {
+      console.debug("Speech synthesis error", event.error);
+      finish();
+    };
+    try { window.speechSynthesis.speak(utterance); }
+    catch (error) {
+      console.debug("Speech synthesis unavailable", error);
+      finish();
+    }
+  }, []);
 
-  return { supported: !!SR, ttsSupported: TTS, listening, interim, speaking, analyser, voices,
-           start, stop, beginReply, feed, endReply, cancelSpeech, speakNow };
+  const beginReply = useCallback(() => { chunker.current.reset(); }, []);
+  const feed = useCallback((delta) => chunker.current.push(delta).forEach(say), [say]);
+  const endReply = useCallback(() => chunker.current.flush().forEach(say), [say]);
+  const speakNow = useCallback((text) => { cancelSpeech(); say(text); }, [cancelSpeech, say]);
+
+  if (!controller.current) {
+    controller.current = new SpeechRecognitionController({
+      createRecognition: SR ? () => new SR() : null,
+      getLanguage: () => callbacks.current.settings.lang,
+      onState: (nextState) => {
+        setState(nextState);
+        if (nextState !== "error") setError("");
+        if (nextState === "error" || nextState === "ready" ||
+            (nextState === "processing" && !controller.current?.continuous)) releaseMicrophone();
+      },
+      onTranscript: (transcript) => {
+        try {
+          const result = callbacks.current.onFinal?.(transcript);
+          result?.catch?.((error) => {
+            console.debug("Voice submission failed", error);
+            callbacks.current.onError?.("Could not send the voice message. Please try again.");
+            controller.current?.responseFinished();
+          });
+        } catch (error) {
+          console.debug("Voice submission failed", error);
+          callbacks.current.onError?.("Could not send the voice message. Please try again.");
+          controller.current?.responseFinished();
+        }
+      },
+      onInterim: (text) => {
+        setInterim(text);
+        if (pendingSpeech.current > 0 && !bargedIn.current && text.trim().split(/\s+/).length >= 2) {
+          bargedIn.current = true;
+          cancelSpeech();
+          callbacks.current.onBargeIn?.();
+        }
+      },
+      onError: (message) => {
+        setError(message);
+        callbacks.current.onError?.(message);
+      },
+    });
+  }
+
+  const start = useCallback(async ({ continuous = false } = {}) => {
+    if (starting.current) return false;
+    setError("");
+    if (!SR) return controller.current.start({ continuous });
+    if (controller.current.listening) return controller.current.start({ continuous });
+    setState("ready");
+    if (speaking) {
+      cancelSpeech();
+      callbacks.current.onBargeIn?.();
+    }
+    const generation = ++startGeneration.current;
+    starting.current = true;
+    try {
+      await ensureMicrophone();
+      if (generation !== startGeneration.current) {
+        releaseMicrophone();
+        return false;
+      }
+      bargedIn.current = false;
+      return controller.current.start({ continuous });
+    } catch (error) {
+      console.debug("Microphone setup failed", error);
+      callbacks.current.onError?.(microphoneErrorMessage(error));
+      setState("error");
+      return false;
+    } finally {
+      if (generation === startGeneration.current) starting.current = false;
+    }
+  }, [cancelSpeech, speaking]);
+
+  const stop = useCallback(({ commit = false } = {}) => {
+    startGeneration.current++;
+    starting.current = false;
+    controller.current?.stop({ commit });
+    if (!commit) releaseMicrophone();
+    setInterim("");
+  }, []);
+
+  const responseFinished = useCallback(() => controller.current?.responseFinished(), []);
+  const changeLanguage = useCallback(() => controller.current?.changeLanguage(), []);
+
+  useEffect(() => {
+    if (!TTS) return;
+    const loadVoices = () => setVoices(window.speechSynthesis.getVoices());
+    loadVoices();
+    window.speechSynthesis.addEventListener("voiceschanged", loadVoices);
+    return () => window.speechSynthesis.removeEventListener("voiceschanged", loadVoices);
+  }, []);
+
+  useEffect(() => {
+    if (!analyser || !settings.continuousListening || !["listening", "reconnecting"].includes(state)) return;
+    const samples = new Float32Array(analyser.fftSize);
+    const monitor = window.setInterval(() => {
+      try {
+        analyser.getFloatTimeDomainData(samples);
+        let energy = 0;
+        for (let index = 0; index < samples.length; index++) energy += samples[index] * samples[index];
+        controller.current?.noteAudioLevel(Math.sqrt(energy / samples.length));
+      } catch (error) {
+        console.debug("Microphone activity sampling stopped", error);
+        controller.current?.setAudioMonitoring(false);
+      }
+    }, 100);
+    return () => window.clearInterval(monitor);
+  }, [analyser, settings.continuousListening, state]);
+
+  useEffect(() => { changeLanguage(); }, [settings.lang, changeLanguage]);
+
+  useEffect(() => () => {
+    controller.current?.stop();
+    releaseMicrophone();
+    if (TTS) window.speechSynthesis.cancel();
+  }, []);
+
+  return {
+    supported: Boolean(SR), unsupportedMessage: recognitionUnavailableMessage(settings.lang),
+    ttsSupported: TTS, state, error, listening: state === "listening",
+    interim, speaking, analyser, voices, start, stop, responseFinished, changeLanguage,
+    beginReply, feed, endReply, cancelSpeech, speakNow,
+  };
 }

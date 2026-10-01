@@ -1,6 +1,6 @@
 const STEPS = [["listening", "Listening"], ["analyzing", "Analyzing"], ["thinking", "Thinking"], ["using_tool", "Using tool"], ["generating", "Generating"], ["speaking", "Speaking"]];
 
-export const LABELS = { idle: "Ready", connecting: "Connecting…", listening: "Listening…", analyzing: "Analyzing…", thinking: "Thinking…",
+export const LABELS = { idle: "Ready", ready: "Ready", paused: "Paused", error: "Voice unavailable", reconnecting: "Reconnecting…", connecting: "Connecting…", listening: "Listening…", analyzing: "Analyzing…", processing: "Thinking…", thinking: "Thinking…",
   using_tool: "Using tool…", generating: "Generating…", speaking: "Speaking…", awaiting_confirmation: "Waiting for your confirmation" };
 
 export default function StatusStrip({ phase }) {

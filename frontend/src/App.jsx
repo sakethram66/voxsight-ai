@@ -31,28 +31,51 @@ export default function App() {
 
   const agent = useAgent({
     onDelta: (d) => voiceRef.current?.feed(d),
-    onDone: () => voiceRef.current?.endReply(),
-    onError: (m, fromServer) => { if (fromServer) voiceRef.current?.endReply(); notify(m); },
+    onDone: () => { voiceRef.current?.endReply(); voiceRef.current?.responseFinished(); },
+    onError: (m, fromServer) => { if (fromServer) { voiceRef.current?.endReply(); voiceRef.current?.responseFinished(); } notify(m); },
     onConfirm: () => voiceRef.current?.speakNow("This action needs your confirmation."),
   });
   const capture = useCapture(notify);
 
   const submit = async (spoken) => {
+    const fromVoice = typeof spoken === "string";
+    const resumeVoice = () => { if (fromVoice) voiceRef.current?.responseFinished(); };
     const t = (typeof spoken === "string" ? spoken : text).trim();
     const ready = files.filter((f) => f.status === "ready");
-    if (files.some((f) => f.status === "uploading")) return notify("Still uploading attachments…");
-    if (!t && !ready.length) return;
+    if (files.some((f) => f.status === "uploading")) { notify("Still uploading attachments…"); resumeVoice(); return; }
+    if (!t && !ready.length) { resumeVoice(); return; }
     if (agent.busy) { agent.cancel(); voiceRef.current?.cancelSpeech(); } // a new question replaces the current one
     let frames = [];
     if (settings.autoFrames) {
       try { frames = await capture.grabFrames(); } catch (e) { notify(`Couldn't capture a frame: ${e.message}`); }
     }
     voiceRef.current?.beginReply();
-    if (agent.send({ text: t, files: ready, frames, provider: settings.aiProvider || undefined })) { setText(""); setFiles((f) => f.filter((x) => x.status !== "ready")); }
+    if (agent.send({ text: t, files: ready, frames, provider: settings.aiProvider || undefined })) {
+      setText(""); setFiles((f) => f.filter((x) => x.status !== "ready"));
+    } else resumeVoice();
   };
 
   const voice = useVoice({ settings, onFinal: (t) => submit(t), onError: notify, onBargeIn: () => agent.cancel() });
   voiceRef.current = voice;
+  const previousContinuous = useRef(settings.continuousListening);
+  useEffect(() => {
+    if (settings.continuousListening) {
+      voiceRef.current?.start({ continuous: true }).then((started) => {
+        if (!started) {
+          previousContinuous.current = false;
+          setSettings((current) => ({ ...current, continuousListening: false }));
+        }
+      });
+    }
+    else if (previousContinuous.current) voiceRef.current?.stop();
+    previousContinuous.current = settings.continuousListening;
+  }, [settings.continuousListening]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (settings.continuousListening && ["error", "paused"].includes(voice.state)) {
+      previousContinuous.current = false;
+      setSettings((current) => ({ ...current, continuousListening: false }));
+    }
+  }, [settings.continuousListening, voice.state]);
 
   const addFiles = async (list) => {
     for (const file of list) {
@@ -80,18 +103,23 @@ export default function App() {
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
   });
-  useEffect(() => { if (settings.handsFree) voice.start({ keepSpeech: true }); else voice.stop(); }, [settings.handsFree]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const phase = voice.speaking ? "speaking" : agent.busy ? agent.state.name : voice.listening ? "listening" : agent.state.name;
-  const mode = voice.listening && !voice.speaking && !agent.busy ? "listening" : voice.speaking ? "speaking" : agent.busy ? "busy" : "idle";
+  const phase = agent.busy ? agent.state.name : voice.state === "processing" ? "thinking" : voice.state;
   const pill = phase === "analyzing" && agent.state.detail ? `${agent.state.detail}…` : phase === "using_tool" && agent.state.tool ? `Using ${agent.state.tool}…` : LABELS[phase] || phase;
+  const pillBusy = agent.busy || ["listening", "reconnecting", "speaking"].includes(voice.state);
 
-  const onMic = () => {
-    if (voice.listening) return voice.stop();
-    if (agent.busy || voice.speaking) { agent.cancel(); voice.cancelSpeech(); }
-    voice.start();
+  const stopAll = () => {
+    setSettings((current) => ({ ...current, continuousListening: false }));
+    voice.stop(); voice.cancelSpeech(); agent.cancel();
   };
-  const stopAll = () => { agent.cancel(); voice.cancelSpeech(); };
+  const stopVoice = () => {
+    if (settings.continuousListening && settings.resumeAfterInterruption && (agent.busy || voice.speaking)) {
+      agent.cancel();
+      voice.cancelSpeech();
+      voice.responseFinished();
+      return;
+    }
+    stopAll();
+  };
 
   return (
     <div className="shell">
@@ -101,15 +129,19 @@ export default function App() {
         <header>
           <button className="icon menu" onClick={() => setDrawer(true)} aria-label="Open sessions"><Icon name="menu" /></button>
           <div className="title"><h1>Vox<span>Sight</span> AI</h1><p>HEAR IT. SEE IT. UNDERSTAND IT. ACT ON IT.</p></div>
-          <div className={`pill ${phase !== "idle" ? "busy" : ""}`} role="status"><i />{pill}</div>
+          <div className={`pill ${pillBusy ? "busy" : ""}`} role="status"><i />{pill}</div>
           <button className="icon" onClick={() => setShowSettings(true)} aria-label="Settings"><Icon name="sliders" /></button>
         </header>
         <StatusStrip phase={phase} />
         {health && !health.ok && <div className="banner" role="alert">Setup needed: {health.error}</div>}
-        <Stage voice={voice} mode={mode} onMic={onMic} capture={capture} autoFrames={settings.autoFrames} />
+        <Stage capture={capture} autoFrames={settings.autoFrames} />
         <Messages messages={agent.messages} />
         <Composer text={text} setText={setText} files={files} setFiles={setFiles} addFiles={addFiles} onSend={submit}
-                  onStop={stopAll} busy={agent.busy} connected={agent.connected} capture={capture} />
+            onStop={stopAll} busy={agent.busy} connected={agent.connected} capture={capture} voice={voice}
+            continuousListening={settings.continuousListening}
+            setContinuousListening={(value) => setSettings((current) => ({ ...current, continuousListening: value }))}
+            language={settings.lang} setLanguage={(value) => setSettings((current) => ({ ...current, lang: value }))}
+            onStopVoice={stopVoice} />
       </div>
       <ConfirmModal req={agent.confirm} onAnswer={agent.answer} />
       <SettingsPanel open={showSettings} onClose={() => setShowSettings(false)} s={settings} set={setSettings} voice={voice} provider={health?.provider || "auto"} />
