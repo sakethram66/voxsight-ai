@@ -86,7 +86,7 @@ class ProviderManager(LLMProvider):
             except ProviderError as exc:
                 if emitted:
                     raise
-                failed.append(f"{provider.name} {'temporarily unavailable' if exc.transient else 'request failed'}")
+                failed.append(f"{provider.name}: {exc}")
                 state.active_index = index + 1
             except Exception:
                 if emitted:

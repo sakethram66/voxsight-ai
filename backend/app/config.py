@@ -13,7 +13,7 @@ class Settings:
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
     gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
     groq_api_key: str = os.getenv("GROQ_API_KEY", "")
-    groq_model: str = os.getenv("GROQ_MODEL", "") or "meta-llama/llama-4-scout-17b-16e-instruct"
+    groq_model: str = os.getenv("GROQ_MODEL", "") or "openai/gpt-oss-120b"
     openrouter_api_key: str = os.getenv("OPENROUTER_API_KEY", "")
     openrouter_model: str = os.getenv("OPENROUTER_MODEL", "") or "openai/gpt-4.1-mini"
     cors_origins: tuple = tuple(o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(","))

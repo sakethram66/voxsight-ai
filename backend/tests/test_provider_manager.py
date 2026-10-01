@@ -81,6 +81,19 @@ def test_all_provider_failures_are_clear_and_do_not_leak_error_payloads():
         run_stream(ProviderManager(providers))
 
 
+def test_all_provider_failures_preserve_classified_reasons():
+    providers = {
+        "gemini": FakeProvider("gemini", [ProviderError("temporarily unavailable", transient=True)]),
+        "groq": FakeProvider("groq", [ProviderError("rejected the request (HTTP 400).")]),
+        "openrouter": FakeProvider("openrouter", [ProviderError("request failed")]),
+    }
+
+    with pytest.raises(ProviderError) as exc:
+        run_stream(ProviderManager(providers))
+
+    assert "groq: rejected the request (HTTP 400)." in str(exc.value)
+
+
 @pytest.mark.parametrize("mode,expected", [
     ("gemini", "gemini"), ("groq", "groq"), ("openrouter", "openrouter"),
 ])

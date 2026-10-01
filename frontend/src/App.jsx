@@ -32,7 +32,10 @@ export default function App() {
   const agent = useAgent({
     onDelta: (d) => voiceRef.current?.feed(d),
     onDone: () => { voiceRef.current?.endReply(); voiceRef.current?.responseFinished(); },
-    onError: (m, fromServer) => { if (fromServer) { voiceRef.current?.endReply(); voiceRef.current?.responseFinished(); } notify(m); },
+    onError: (m, fromServer) => {
+      if (fromServer) { voiceRef.current?.endReply(); voiceRef.current?.responseFinished(); }
+      else notify(m);
+    },
     onConfirm: () => voiceRef.current?.speakNow("This action needs your confirmation."),
   });
   const capture = useCapture(notify);
