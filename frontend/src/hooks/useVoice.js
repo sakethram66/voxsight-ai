@@ -24,6 +24,7 @@ export function useVoice({ settings, onFinal, onError, onBargeIn }) {
   callbacks.current = { settings, onFinal, onError, onBargeIn };
   const microphone = useRef(null), audioContext = useRef(null), controller = useRef(null);
   const pendingSpeech = useRef(0), speechGeneration = useRef(0), chunker = useRef(new SentenceChunker());
+  const remoteSpeechQueue = useRef(Promise.resolve()), remoteAudio = useRef(null), finishRemoteAudio = useRef(null);
   const bargedIn = useRef(false), starting = useRef(false);
   const startGeneration = useRef(0);
 
@@ -60,6 +61,10 @@ export function useVoice({ settings, onFinal, onError, onBargeIn }) {
     speechGeneration.current++;
     pendingSpeech.current = 0;
     chunker.current.reset();
+    finishRemoteAudio.current?.();
+    finishRemoteAudio.current = null;
+    remoteAudio.current?.pause();
+    remoteAudio.current = null;
     if (TTS) window.speechSynthesis.cancel();
     setSpeaking(false);
     controller.current?.setSpeaking(false);
@@ -67,17 +72,8 @@ export function useVoice({ settings, onFinal, onError, onBargeIn }) {
 
   const say = useCallback((text) => {
     const current = callbacks.current.settings;
-    if (!TTS || !shouldAutoSpeak(current) || !text) return;
-    const utterance = new SpeechSynthesisUtterance(text);
-    const voice = chooseSpeechVoice(window.speechSynthesis.getVoices(), current.lang, current.voiceURI);
-    utterance.lang = current.lang;
-    if (voice) utterance.voice = voice;
-    utterance.rate = current.rate;
-    utterance.volume = current.volume ?? 1;
+    if (!shouldAutoSpeak(current) || !text) return;
     const generation = speechGeneration.current;
-    pendingSpeech.current++;
-    setSpeaking(true);
-    controller.current?.setSpeaking(true);
     const finish = () => {
       if (generation !== speechGeneration.current) return;
       pendingSpeech.current = Math.max(0, pendingSpeech.current - 1);
@@ -86,6 +82,63 @@ export function useVoice({ settings, onFinal, onError, onBargeIn }) {
         controller.current?.setSpeaking(false);
       }
     };
+
+    if (current.lang === "te-IN" || current.lang === "hi-IN") {
+      pendingSpeech.current++;
+      setSpeaking(true);
+      controller.current?.setSpeaking(true);
+      remoteSpeechQueue.current = remoteSpeechQueue.current.catch(() => {}).then(async () => {
+        if (generation !== speechGeneration.current) return;
+        const response = await fetch("/api/speech", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text, language: current.lang, rate: current.rate, volume: current.volume ?? 1 }),
+        });
+        if (!response.ok) throw new Error(`Speech request failed (${response.status}).`);
+        const url = URL.createObjectURL(await response.blob());
+        if (generation !== speechGeneration.current) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+        const audio = new Audio(url);
+        remoteAudio.current = audio;
+        try {
+          await new Promise((resolve, reject) => {
+            const cleanup = () => {
+              audio.removeEventListener("ended", complete);
+              audio.removeEventListener("error", fail);
+              if (finishRemoteAudio.current === complete) finishRemoteAudio.current = null;
+            };
+            const complete = () => { cleanup(); resolve(); };
+            const fail = () => { cleanup(); reject(new Error("Generated speech could not be played.")); };
+            finishRemoteAudio.current = complete;
+            audio.addEventListener("ended", complete, { once: true });
+            audio.addEventListener("error", fail, { once: true });
+            audio.play()?.catch?.(fail);
+          });
+        } finally {
+          URL.revokeObjectURL(url);
+          if (remoteAudio.current === audio) remoteAudio.current = null;
+        }
+        finish();
+      }).catch((error) => {
+        if (generation !== speechGeneration.current) return;
+        console.warn("Multilingual speech failed", error);
+        callbacks.current.onError?.(`${current.lang === "te-IN" ? "Telugu" : "Hindi"} speech could not play. Check the server connection and try again.`);
+        cancelSpeech();
+      });
+      return;
+    }
+    if (!TTS) return;
+    const utterance = new SpeechSynthesisUtterance(text);
+    const voice = chooseSpeechVoice(window.speechSynthesis.getVoices(), current.lang, current.voiceURI);
+    utterance.lang = current.lang;
+    if (voice) utterance.voice = voice;
+    utterance.rate = current.rate;
+    utterance.volume = current.volume ?? 1;
+    pendingSpeech.current++;
+    setSpeaking(true);
+    controller.current?.setSpeaking(true);
     utterance.onend = finish;
     utterance.onerror = (event) => {
       console.debug("Speech synthesis error", event.error);
@@ -96,7 +149,7 @@ export function useVoice({ settings, onFinal, onError, onBargeIn }) {
       console.debug("Speech synthesis unavailable", error);
       finish();
     }
-  }, []);
+  }, [cancelSpeech]);
 
   const beginReply = useCallback(() => { chunker.current.reset(); }, []);
   const feed = useCallback((delta) => chunker.current.push(delta).forEach(say), [say]);
@@ -189,6 +242,13 @@ export function useVoice({ settings, onFinal, onError, onBargeIn }) {
     loadVoices();
     window.speechSynthesis.addEventListener("voiceschanged", loadVoices);
     return () => window.speechSynthesis.removeEventListener("voiceschanged", loadVoices);
+  }, []);
+
+  useEffect(() => {
+    const updatePageVisibility = () => controller.current?.setPageVisible(!document.hidden);
+    document.addEventListener("visibilitychange", updatePageVisibility);
+    updatePageVisibility();
+    return () => document.removeEventListener("visibilitychange", updatePageVisibility);
   }, []);
 
   useEffect(() => {

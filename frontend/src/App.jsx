@@ -53,7 +53,7 @@ export default function App() {
       try { frames = await capture.grabFrames(); } catch (e) { notify(`Couldn't capture a frame: ${e.message}`); }
     }
     voiceRef.current?.beginReply();
-    if (agent.send({ text: t, files: ready, frames, provider: settings.aiProvider || undefined })) {
+    if (agent.send({ text: t, files: ready, frames, provider: settings.aiProvider || undefined, language: settings.lang })) {
       setText(""); setFiles((f) => f.filter((x) => x.status !== "ready"));
     } else resumeVoice();
   };
@@ -74,7 +74,7 @@ export default function App() {
     previousContinuous.current = settings.continuousListening;
   }, [settings.continuousListening]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (settings.continuousListening && ["error", "paused"].includes(voice.state)) {
+      if (settings.continuousListening && voice.state === "error") {
       previousContinuous.current = false;
       setSettings((current) => ({ ...current, continuousListening: false }));
     }
