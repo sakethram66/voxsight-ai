@@ -257,6 +257,28 @@ export function useAgent(callbacks) {
     }
   }, []);
 
+  const runTool = useCallback(({ name, args, provider }) => {
+    const s = ws.current;
+
+    if (!s || s.readyState !== 1) {
+      cb.current.onError?.(
+        "Not connected to the VoxSight server. Retrying…"
+      );
+      return false;
+    }
+
+    s.send(
+      JSON.stringify({
+        type: "tool_action",
+        name,
+        args,
+        provider,
+      })
+    );
+
+    return true;
+  }, []);
+
   const answer = useCallback((approved) => {
     setConfirm((c) => {
       if (c && ws.current?.readyState === 1) {
@@ -304,6 +326,7 @@ export function useAgent(callbacks) {
     connected: state.name !== "connecting",
     send,
     cancel,
+    runTool,
     answer,
     remove,
     newSession: () => setSid(newSessionId()),
