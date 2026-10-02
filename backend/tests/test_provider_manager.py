@@ -86,6 +86,22 @@ def test_search_falls_back_to_openrouter_even_when_chat_provider_is_groq():
     assert result["answer"] == "openrouter"
 
 
+def test_search_falls_back_when_provider_raises_generic_exception():
+    class SearchProvider(FakeProvider):
+        async def grounded_search(self, query):
+            return {"answer": self.name, "sources": []}
+
+    gemini = FakeProvider("gemini", capabilities=ProviderCapabilities(web_search=True))
+    async def boom(query):
+        raise RuntimeError("provider crashed")
+    gemini.grounded_search = boom
+    router = SearchProvider("openrouter", capabilities=ProviderCapabilities(web_search=True))
+    manager = ProviderManager({"gemini": gemini, "openrouter": router})
+
+    result = asyncio.run(manager.grounded_search("query"))
+    assert result["answer"] == "openrouter"
+
+
 def test_groq_failure_falls_through_to_openrouter():
     providers = {
         "gemini": FakeProvider("gemini", [ProviderError("quota")]),

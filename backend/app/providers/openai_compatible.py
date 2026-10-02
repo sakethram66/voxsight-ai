@@ -1,11 +1,23 @@
 import base64
 import json
+import logging
+import re
 from dataclasses import replace
 
 from openai import AsyncOpenAI
 
 from .base import (Done, LLMProvider, Message, ProviderCapabilities, ProviderError,
                    TextDelta, ToolCall, ToolCallEvent)
+
+logger = logging.getLogger(__name__)
+
+
+def _sanitize_error(value: str) -> str:
+    text = str(value).replace("\r", " ").replace("\n", " ")
+    text = re.sub(r"(?i)(Bearer\s+[A-Za-z0-9._~+/-]+=*)", "<redacted>", text)
+    text = re.sub(r"(?i)(sk-or-[A-Za-z0-9._-]+|gsk_[A-Za-z0-9._-]+|AIza[A-Za-z0-9_-]+|AQ\.[A-Za-z0-9._-]+)", "<redacted>", text)
+    return text[:500]
+
 
 _GROQ_MODELS = {
     "meta-llama/llama-4-scout-17b-16e-instruct": ProviderCapabilities(
@@ -27,6 +39,10 @@ class OpenAICompatibleProvider(LLMProvider):
         if not api_key:
             raise ProviderError(f"{name} is not configured. Set its API key in backend/.env.")
         self.name = name
+        if name == "groq" and not api_key.startswith("gsk_"):
+            raise ProviderError("GROQ_API_KEY does not match the expected Groq format.")
+        if name == "openrouter" and not api_key.startswith("sk-or-"):
+            raise ProviderError("OPENROUTER_API_KEY does not match the expected OpenRouter format.")
         self.model = model
         known = _GROQ_MODELS if name == "groq" else _OPENROUTER_MODELS
         capabilities = known.get(model, ProviderCapabilities())
@@ -140,6 +156,7 @@ class OpenAICompatibleProvider(LLMProvider):
     async def grounded_search(self, query: str) -> dict:
         if self.name != "openrouter":
             raise ProviderError("This provider does not support web search.")
+        logger.info("OpenRouter web_search attempt provider=%s model=%s format=chat.completions plugins[web]", self.name, self.model)
         try:
             response = await self.client.chat.completions.create(
                 model=self.model,
@@ -149,12 +166,20 @@ class OpenAICompatibleProvider(LLMProvider):
             )
         except Exception as exc:
             status = getattr(exc, "status_code", None)
+            text = str(exc).lower()
+            logger.warning("OpenRouter web_search failed provider=%s model=%s status=%s error=%s",
+                           self.name, self.model, status, _sanitize_error(str(exc)))
             if status == 402:
                 raise ProviderError("OpenRouter web search requires credits or billing (HTTP 402).") from exc
             if status == 429:
                 raise ProviderError("OpenRouter web search is rate limited (HTTP 429).", transient=True) from exc
             if isinstance(status, int) and status >= 500:
                 raise ProviderError("OpenRouter web search is temporarily unavailable.", transient=True) from exc
+            if status in (400, 422) or "plugin" in text or "web search" in text or "not support" in text:
+                raise ProviderError(
+                    f"OpenRouter model '{self.model}' does not support the web-search plugin. "
+                    "Set OPENROUTER_MODEL to a web-capable model such as openai/gpt-4o-mini or openai/gpt-4.1-mini."
+                ) from exc
             raise ProviderError("OpenRouter web search request failed.") from exc
 
         message = response.choices[0].message if response.choices else None

@@ -113,7 +113,13 @@ header { display: flex; align-items: center; gap: 10px; padding: 12px 0 6px; }
 .btns button { background: var(--accent); color: #041018; border: 0; border-radius: 10px; padding: 10px 20px; font-weight: 600; min-height: 44px; } .btns .ghost { background: transparent; color: var(--fg); border: 1px solid var(--line); }
 .opt { display: flex; gap: 10px; align-items: flex-start; margin: 10px 0 2px; } .fld { display: grid; gap: 4px; margin: 12px 0; font-size: .85rem; color: var(--dim); }
 .fld select { background: #0a1224; color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 8px; font: inherit; }
-.fld input, .fld textarea { width: 100%; min-width: 0; background: #0a1224; color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 9px; font: inherit; }
+.fld input, .fld textarea {
+  width: 100%; min-width: 0;
+  background: #f5f7f1; color: #1d2b25;
+  border: 1px solid #d9e2cf; border-radius: 8px; padding: 9px; font: inherit;
+}
+.fld input::placeholder, .fld textarea::placeholder { color: #6e7a73; }
+.fld input:focus, .fld textarea:focus { outline: none; border-color: #8aa651; box-shadow: 0 0 0 3px rgba(163, 196, 88, .18); }
 .fld textarea { resize: vertical; }
 .toasts { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); display: grid; gap: 8px; z-index: 60; width: min(520px, calc(100% - 24px)); }
 .toast { background: #2a1119; border: 1px solid var(--err); color: #ffd6dc; padding: 10px 14px; border-radius: 12px; font-size: .85rem; cursor: pointer; box-shadow: 0 6px 24px rgba(0,0,0,.4); }

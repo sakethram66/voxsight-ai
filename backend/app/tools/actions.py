@@ -60,6 +60,8 @@ class SendEmail(Tool):
         if not EMAIL_RE.match(to) or "\n" in to + subject or "\r" in to + subject:
             raise ValueError("Invalid recipient or subject.")
         s = self.s
+        if not s.smtp_ready:
+            raise RuntimeError("SMTP is not configured. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, and SMTP_FROM.")
 
         def send():
             msg = EmailMessage()
@@ -71,8 +73,7 @@ class SendEmail(Tool):
                 smtp = smtplib.SMTP(s.smtp_host, s.smtp_port, timeout=20)
                 smtp.starttls()
             with smtp:
-                if s.smtp_user:
-                    smtp.login(s.smtp_user, s.smtp_password)
+                smtp.login(s.smtp_user, "".join(str(s.smtp_password).split()))
                 smtp.send_message(msg)
         await asyncio.to_thread(send)
         return {"sent": True, "to": to, "subject": subject}

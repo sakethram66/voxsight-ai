@@ -56,7 +56,7 @@ class ProviderManager(LLMProvider):
     def tools_for_turn(self, tools: list) -> list:
         state = self._state()
         index = min(state.active_index, len(state.providers) - 1)
-        if not any(provider.capabilities.web_search for provider in self.providers.values()):
+        if not any(provider.capabilities.web_search for provider in state.providers):
             return [tool for tool in tools if tool.name != "web_search"]
         return tools
 
@@ -66,7 +66,7 @@ class ProviderManager(LLMProvider):
         start = min(state.active_index, len(state.providers) - 1)
         for index in range(start, len(state.providers)):
             provider = state.providers[index]
-            has_search_provider = any(candidate.capabilities.web_search for candidate in self.providers.values())
+            has_search_provider = any(candidate.capabilities.web_search for candidate in state.providers)
             provider_tools = tools if has_search_provider else [
                 tool for tool in tools if tool.name != "web_search"]
             reason = provider.capabilities.unsupported(messages, provider_tools)
@@ -118,6 +118,8 @@ class ProviderManager(LLMProvider):
             try:
                 return await provider.grounded_search(query)
             except ProviderError as exc:
+                failures.append(f"{provider.name}: {exc}")
+            except Exception as exc:
                 failures.append(f"{provider.name}: {exc}")
         if failures:
             raise ProviderError("Web search failed: " + "; ".join(failures) + ".")

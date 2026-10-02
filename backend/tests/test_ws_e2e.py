@@ -11,6 +11,7 @@ from app.providers.base import TextDelta, ToolCall, ToolCallEvent
 from app.providers.testing import ScriptedProvider
 from app import speech
 from app.store import Store
+from app.tools.actions import SendEmail
 from app.tools.builtin import default_registry
 from .helpers import png_bytes
 
@@ -203,6 +204,38 @@ def test_email_action_uses_smtp_only_after_confirm(tmp_path, monkeypatch):
                 ws.send_json({"type": "confirm", "id": e["id"], "approved": True})
             if e["type"] == "done": break
     assert len(sent) == 1 and sent[0]["To"] == "a@b.co"
+
+
+def test_email_uses_gmail_app_password_without_space_formatting(monkeypatch):
+    seen = {}
+
+    class FakeSMTP:
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def starttls(self): pass
+        def login(self, user, password):
+            seen["user"] = user
+            seen["password"] = password
+        def send_message(self, msg):
+            pass
+
+    monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
+    s = type("S", (), {
+        "smtp_host": "smtp.gmail.com",
+        "smtp_port": 587,
+        "smtp_user": "me@gmail.com",
+        "smtp_password": "abcd efgh ijkl mnop",
+        "smtp_from": "me@gmail.com",
+        "smtp_ready": True,
+    })()
+
+    async def run_test():
+        await SendEmail(s).run("you@example.com", "Hi", "Body")
+
+    import asyncio
+    asyncio.run(run_test())
+    assert seen == {"user": "me@gmail.com", "password": "abcdefghijklmnop"}
 
 
 def test_web_search_tool_returns_sources(tmp_path):

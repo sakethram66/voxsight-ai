@@ -1,5 +1,7 @@
 import asyncio
+import logging
 import random
+import re
 from typing import AsyncIterator
 
 from google import genai
@@ -10,6 +12,14 @@ from .base import (Done, LLMProvider, ProviderCapabilities, ProviderError, TextD
 
 _RETRYABLE_ERRORS = {429, 500, 502, 503, 504}
 _RETRY_DELAYS = (2, 4, 8)
+logger = logging.getLogger(__name__)
+
+
+def _sanitize_error(value: str) -> str:
+    text = str(value).replace("\r", " ").replace("\n", " ")
+    text = re.sub(r"(?i)(Bearer\s+[A-Za-z0-9._~+/-]+=*)", "<redacted>", text)
+    text = re.sub(r"(?i)(sk-or-[A-Za-z0-9._-]+|gsk_[A-Za-z0-9._-]+|AIza[A-Za-z0-9_-]+|AQ\.[A-Za-z0-9._-]+)", "<redacted>", text)
+    return text[:500]
 
 
 def _retry_delay(retry: int) -> float:
@@ -50,7 +60,14 @@ class GeminiProvider(LLMProvider):
     def __init__(self, api_key: str, model: str):
         if not api_key:
             raise ProviderError("GEMINI_API_KEY is not set. Add it to backend/.env.")
+        if api_key.startswith("ya") or "oauth" in api_key.lower():
+            raise ProviderError("GEMINI_API_KEY appears to be a Google OAuth access token, not a Gemini API key. "
+                               "Generate a key in Google AI Studio (it should start with 'AIza...' or 'AQ.').")
+        if not (api_key.startswith("AIza") or api_key.startswith("AQ.")):
+            raise ProviderError("GEMINI_API_KEY does not match the expected Google AI Studio format. "
+                               "Use a valid Gemini API key from Google AI Studio, not a Google OAuth token.")
         self.model = model
+        logger.info("Gemini provider initialized provider=%s model=%s", self.name, self.model)
         self.client = genai.Client(api_key=api_key)
 
     def _contents(self, messages: list) -> list:
@@ -120,6 +137,7 @@ class GeminiProvider(LLMProvider):
 
     async def grounded_search(self, query: str) -> dict:
         """Google Search grounding in a separate call, so it never conflicts with our function tools."""
+        logger.info("Gemini web_search attempt provider=%s model=%s", self.name, self.model)
         for retry in range(len(_RETRY_DELAYS) + 1):
             try:
                 r = await self.client.aio.models.generate_content(
@@ -128,6 +146,8 @@ class GeminiProvider(LLMProvider):
                 break
             except Exception as e:
                 code = getattr(e, "code", None)
+                logger.warning("Gemini web_search failed provider=%s model=%s status=%s error=%s",
+                               self.name, self.model, code, _sanitize_error(str(e)))
                 if code in _RETRYABLE_ERRORS and code != 429 and retry < len(_RETRY_DELAYS):
                     await asyncio.sleep(_retry_delay(retry))
                     continue
