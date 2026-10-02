@@ -1,5 +1,6 @@
 import base64
 import json
+from dataclasses import replace
 
 from openai import AsyncOpenAI
 
@@ -28,7 +29,8 @@ class OpenAICompatibleProvider(LLMProvider):
         self.name = name
         self.model = model
         known = _GROQ_MODELS if name == "groq" else _OPENROUTER_MODELS
-        self.capabilities = known.get(model, ProviderCapabilities())
+        capabilities = known.get(model, ProviderCapabilities())
+        self.capabilities = replace(capabilities, web_search=True) if name == "openrouter" else capabilities
         self.client = AsyncOpenAI(api_key=api_key, base_url=base_url)
 
     def _messages(self, system: str, messages: list) -> list:
@@ -123,7 +125,10 @@ class OpenAICompatibleProvider(LLMProvider):
             error_type = type(exc).__name__
             if status == 402:
                 raise ProviderError(f"{self.name} requires credits or billing (HTTP 402).") from exc
-            if status == 429 or (isinstance(status, int) and status >= 500):
+            if status == 429:
+                raise ProviderError(f"{self.name} rate limit reached (HTTP 429). Check the model's rate limits or billing.",
+                                    transient=True) from exc
+            if isinstance(status, int) and status >= 500:
                 raise ProviderError(f"{self.name} is temporarily unavailable.", transient=True) from exc
             if status in (400, 401, 403, 404):
                 raise ProviderError(f"{self.name} rejected the request (HTTP {status}).") from exc
@@ -131,3 +136,39 @@ class OpenAICompatibleProvider(LLMProvider):
                     error_type in {"APITimeoutError", "APIConnectionError"}):
                 raise ProviderError(f"{self.name} is temporarily unavailable.", transient=True) from exc
             raise ProviderError(f"{self.name} request failed.") from exc
+
+    async def grounded_search(self, query: str) -> dict:
+        if self.name != "openrouter":
+            raise ProviderError("This provider does not support web search.")
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": query}],
+                max_tokens=700,
+                extra_body={"plugins": [{"id": "web", "max_results": 5}]},
+            )
+        except Exception as exc:
+            status = getattr(exc, "status_code", None)
+            if status == 402:
+                raise ProviderError("OpenRouter web search requires credits or billing (HTTP 402).") from exc
+            if status == 429:
+                raise ProviderError("OpenRouter web search is rate limited (HTTP 429).", transient=True) from exc
+            if isinstance(status, int) and status >= 500:
+                raise ProviderError("OpenRouter web search is temporarily unavailable.", transient=True) from exc
+            raise ProviderError("OpenRouter web search request failed.") from exc
+
+        message = response.choices[0].message if response.choices else None
+        answer = getattr(message, "content", "") or ""
+        sources, seen = [], set()
+        for annotation in getattr(message, "annotations", None) or []:
+            citation = annotation.get("url_citation") if isinstance(annotation, dict) else getattr(annotation, "url_citation", None)
+            if isinstance(citation, dict):
+                url, title = citation.get("url"), citation.get("title")
+            else:
+                url, title = getattr(citation, "url", None), getattr(citation, "title", None)
+            if url and url not in seen:
+                seen.add(url)
+                sources.append({"title": title or url, "url": url})
+        if not answer and not sources:
+            raise ProviderError("OpenRouter returned no web search results.")
+        return {"answer": answer, "sources": sources[:6]}

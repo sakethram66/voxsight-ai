@@ -75,6 +75,14 @@ export function mergeSpeechSegments(previousText, nextText) {
   return `${previous} ${next}`;
 }
 
+function transcriptForLanguage(result, language) {
+  const alternatives = Array.from({ length: result.length || 1 }, (_, index) => result[index]);
+  const script = language === "te-IN" ? /[\u0C00-\u0C7F]/
+    : language === "hi-IN" ? /[\u0900-\u097F]/ : null;
+  return (script && alternatives.find((alternative) => script.test(alternative.transcript)))
+    ?.transcript || alternatives[0].transcript;
+}
+
 export class SpeechRecognitionController {
   constructor({ createRecognition, getLanguage, onState, onTranscript, onInterim, onError,
     schedule = setTimeout, cancel = clearTimeout, now = () => Date.now(), silenceMs = 2600 }) {
@@ -203,11 +211,16 @@ export class SpeechRecognitionController {
   }
 
   changeLanguage() {
-    if (!this.recognition) return;
-    const shouldRestart = this.enabled && !this.processing && !this.speaking;
+    const shouldRestart = Boolean(this.recognition) && this.enabled && !this.processing && !this.speaking;
     const previous = this.recognition;
     this.generation++;
     this.recognition = null;
+    this.draftFinal = "";
+    this.draftInterim = "";
+    this.speechRevision = 0;
+    this.lastVoiceAt = null;
+    this._clearSilenceTimer();
+    this._emitTranscript();
     try { previous.abort(); } catch { /* recognizer may already be stopped */ }
     if (shouldRestart) {
       this._state("reconnecting");
@@ -318,7 +331,7 @@ export class SpeechRecognitionController {
       recognition.lang = this.getLanguage();
       recognition.interimResults = true;
       recognition.continuous = true;
-      recognition.maxAlternatives = 1;
+      recognition.maxAlternatives = this.getLanguage() === "en-IN" ? 1 : 3;
       this.recognition = recognition;
     } catch (error) {
       this.enabled = false;
@@ -342,11 +355,11 @@ export class SpeechRecognitionController {
       for (let index = event.resultIndex || 0; index < event.results.length; index++) {
         const result = event.results[index];
         if (result.isFinal) {
-          const segment = result[0].transcript;
+          const segment = transcriptForLanguage(result, this.getLanguage());
           this.draftFinal = mergeSpeechSegments(this.draftFinal, this.draftInterim);
           this.draftFinal = mergeSpeechSegments(this.draftFinal, segment);
           this.draftInterim = "";
-        } else interim = mergeSpeechSegments(interim, result[0].transcript);
+        } else interim = mergeSpeechSegments(interim, transcriptForLanguage(result, this.getLanguage()));
       }
       if (interim) this.draftInterim = mergeSpeechSegments(this.draftInterim, interim);
       this.speechRevision++;

@@ -1,7 +1,43 @@
+import { useState } from "react";
 import { ago } from "../lib/util.js";
 import Icon from "./Icon.jsx";
 
-export default function Sidebar({ open, onClose, sessions, sid, onNew, onPick, onDelete, health }) {
+const TOOL_FIELDS = {
+  calculator: [{ name: "expression", label: "Expression", required: true }],
+  web_search: [{ name: "query", label: "Search query", required: true }],
+  save_note: [
+    { name: "title", label: "Title", required: true },
+    { name: "content", label: "Note", required: true, multiline: true },
+  ],
+  send_email: [
+    { name: "to", label: "Recipient", required: true, type: "email" },
+    { name: "subject", label: "Subject", required: true },
+    { name: "body", label: "Message", required: true, multiline: true },
+  ],
+};
+
+export default function Sidebar({ open, onClose, sessions, sid, onNew, onPick, onDelete, health,
+  onRunTool, busy, connected }) {
+  const [activeTool, setActiveTool] = useState("");
+  const [values, setValues] = useState({});
+  const startTool = (name) => {
+    if (busy || !connected) return;
+    if (!TOOL_FIELDS[name]) {
+      onRunTool(name, {});
+      onClose();
+      return;
+    }
+    setActiveTool(name);
+    setValues(Object.fromEntries(TOOL_FIELDS[name].map((field) => [field.name, ""])));
+  };
+  const submitTool = (event) => {
+    event.preventDefault();
+    if (onRunTool(activeTool, values)) {
+      setActiveTool("");
+      onClose();
+    }
+  };
+
   return (
     <>
       {open && <div className="scrim" onClick={onClose} />}
@@ -19,10 +55,29 @@ export default function Sidebar({ open, onClose, sessions, sid, onNew, onPick, o
         </nav>
         <div className="sidefoot">
           <small className="dim">Agent tools</small>
-          <div className="toolchips">{(health?.tools || []).map((t) => <span key={t}>{t}</span>)}{health && !health.email_enabled && <span className="off" title="Set SMTP_* in backend/.env to enable">send_email (off)</span>}</div>
+          <div className="toolchips">{(health?.tools || []).map((tool) => <button key={tool} className="toolchip" type="button"
+            onClick={() => startTool(tool)} disabled={busy || !connected} aria-label={`Run ${tool}`} title={`Run ${tool}`}>
+            {tool}
+          </button>)}{health && !health.email_enabled && <button className="toolchip off" type="button" disabled
+            title="Set SMTP_* in backend/.env to enable">send_email (off)</button>}</div>
           <small className="dim">Stored: text history only. Images and files stay in memory.</small>
         </div>
       </aside>
+      {activeTool && <div className="overlay" onClick={() => setActiveTool("")}>
+        <form className="modal" role="dialog" aria-modal="true" aria-label={`Run ${activeTool}`} onSubmit={submitTool}
+          onClick={(event) => event.stopPropagation()}>
+          <h3>Run {activeTool}</h3>
+          {TOOL_FIELDS[activeTool].map((field) => {
+            const props = { required: field.required, type: field.type || "text", value: values[field.name], autoFocus: field === TOOL_FIELDS[activeTool][0],
+              onChange: (event) => setValues((current) => ({ ...current, [field.name]: event.target.value })) };
+            return <label className="fld" key={field.name}>{field.label}
+              {field.multiline ? <textarea {...props} rows={5} /> : <input {...props} />}
+            </label>;
+          })}
+          <div className="btns"><button type="button" className="ghost" onClick={() => setActiveTool("")}>Cancel</button>
+            <button type="submit" disabled={busy || !connected}>Run tool</button></div>
+        </form>
+      </div>}
     </>
   );
 }

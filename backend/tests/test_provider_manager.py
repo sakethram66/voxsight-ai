@@ -56,13 +56,34 @@ def test_gemini_transient_error_falls_back_to_groq(code):
     assert len(gemini.calls) == 1 and len(groq.calls) == 1 and not router.calls
 
 
-def test_fallback_provider_receives_only_its_supported_tools():
+def test_fallback_provider_keeps_search_tool_when_search_is_available_elsewhere():
     gemini = FakeProvider("gemini", [ProviderError("quota", transient=True)],
                           capabilities=ProviderCapabilities(tools=True, web_search=True))
     groq = FakeProvider("groq", capabilities=ProviderCapabilities(tools=True))
     specs = [type("Spec", (), {"name": name})() for name in ("calculator", "web_search")]
     run_stream(ProviderManager({"gemini": gemini, "groq": groq}), tools=specs)
-    assert [tool.name for tool in groq.calls[0][1]] == ["calculator"]
+    assert [tool.name for tool in groq.calls[0][1]] == ["calculator", "web_search"]
+
+
+def test_search_falls_back_to_openrouter_even_when_chat_provider_is_groq():
+    class SearchProvider(FakeProvider):
+        async def grounded_search(self, query):
+            return {"answer": self.name, "sources": []}
+
+    gemini = FakeProvider("gemini", capabilities=ProviderCapabilities(web_search=True))
+    async def fail_search(query):
+        raise ProviderError("quota", transient=False)
+    gemini.grounded_search = fail_search
+    groq = FakeProvider("groq")
+    router = SearchProvider("openrouter", capabilities=ProviderCapabilities(web_search=True))
+    manager = ProviderManager({"gemini": gemini, "groq": groq, "openrouter": router})
+    token = manager.begin_turn("groq")
+    try:
+        result = asyncio.run(manager.grounded_search("query"))
+    finally:
+        manager.end_turn(token)
+
+    assert result["answer"] == "openrouter"
 
 
 def test_groq_failure_falls_through_to_openrouter():

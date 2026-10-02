@@ -21,6 +21,10 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .sess .del { color: var(--dim); opacity: .6; } .sess .del:hover { color: var(--err); opacity: 1; }
 .sidefoot { border-top: 1px solid var(--line); padding-top: 10px; display: grid; gap: 6px; }
 .toolchips { display: flex; flex-wrap: wrap; gap: 5px; } .toolchips span { font: .7rem ui-monospace, monospace; padding: 2px 7px; border: 1px solid var(--line); border-radius: 99px; color: var(--accent); } .toolchips .off { color: var(--dim); }
+.toolchips .toolchip { font: .7rem ui-monospace, monospace; padding: 3px 8px; border: 1px solid var(--line); border-radius: 7px; background: transparent; color: var(--accent); }
+.toolchips .toolchip:hover:not(:disabled) { border-color: var(--accent); background: rgba(57,229,255,.08); }
+.toolchips .toolchip:disabled { opacity: .55; cursor: not-allowed; }
+.toolchips .toolchip.off { color: var(--dim); }
 .scrim { display: none; }
 
 /* header + status */
@@ -109,6 +113,8 @@ header { display: flex; align-items: center; gap: 10px; padding: 12px 0 6px; }
 .btns button { background: var(--accent); color: #041018; border: 0; border-radius: 10px; padding: 10px 20px; font-weight: 600; min-height: 44px; } .btns .ghost { background: transparent; color: var(--fg); border: 1px solid var(--line); }
 .opt { display: flex; gap: 10px; align-items: flex-start; margin: 10px 0 2px; } .fld { display: grid; gap: 4px; margin: 12px 0; font-size: .85rem; color: var(--dim); }
 .fld select { background: #0a1224; color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 8px; font: inherit; }
+.fld input, .fld textarea { width: 100%; min-width: 0; background: #0a1224; color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 9px; font: inherit; }
+.fld textarea { resize: vertical; }
 .toasts { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); display: grid; gap: 8px; z-index: 60; width: min(520px, calc(100% - 24px)); }
 .toast { background: #2a1119; border: 1px solid var(--err); color: #ffd6dc; padding: 10px 14px; border-radius: 12px; font-size: .85rem; cursor: pointer; box-shadow: 0 6px 24px rgba(0,0,0,.4); }
 

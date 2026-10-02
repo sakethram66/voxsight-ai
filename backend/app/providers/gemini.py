@@ -29,7 +29,9 @@ def classify_error(e: Exception, model: str) -> ProviderError:
     if code == 404:
         return ProviderError(f"Gemini model '{model}' was not found. Check GEMINI_MODEL.")
     if code == 429:
-        return ProviderError("Gemini rate limit or quota reached. Wait a moment and try again.", transient=True)
+        quota_exhausted = "quota" in text.casefold() or "resource_exhausted" in text.casefold()
+        return ProviderError("Gemini rate limit or quota reached. Wait a moment and try again.",
+                             transient=not quota_exhausted)
     if code in _RETRYABLE_ERRORS - {429}:
         return ProviderError("Gemini is temporarily unavailable.", transient=True)
     if code == 400:
@@ -106,11 +108,13 @@ class GeminiProvider(LLMProvider):
                 raise
             except Exception as e:
                 if getattr(e, "code", None) in _RETRYABLE_ERRORS:
-                    if not emitted and retry < len(_RETRY_DELAYS):
+                    if getattr(e, "code", None) != 429 and not emitted and retry < len(_RETRY_DELAYS):
                         await asyncio.sleep(_retry_delay(retry))
                         retry += 1
                         continue
                     error = classify_error(e, self.model)
+                    if getattr(e, "code", None) == 429:
+                        raise error from e
                     raise ProviderError(str(error)) from e
                 raise classify_error(e, self.model) from e
 
@@ -124,11 +128,13 @@ class GeminiProvider(LLMProvider):
                 break
             except Exception as e:
                 code = getattr(e, "code", None)
-                if code in _RETRYABLE_ERRORS and retry < len(_RETRY_DELAYS):
+                if code in _RETRYABLE_ERRORS and code != 429 and retry < len(_RETRY_DELAYS):
                     await asyncio.sleep(_retry_delay(retry))
                     continue
                 error = classify_error(e, self.model)
                 if code in _RETRYABLE_ERRORS:
+                    if code == 429:
+                        raise error from e
                     raise ProviderError(str(error)) from e
                 raise error from e
         cand = (r.candidates or [None])[0]

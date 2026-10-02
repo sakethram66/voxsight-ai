@@ -62,6 +62,19 @@ export function useAgent(callbacks) {
     return true;
   }, []);
 
+  const runTool = useCallback(({ name, args, provider }) => {
+    const socket = ws.current;
+    if (!socket || socket.readyState !== 1) {
+      cb.current.onError?.("Not connected to the VoxSight server. Retrying…");
+      return false;
+    }
+    const summary = Object.values(args).filter(Boolean).join(" ");
+    setMessages((current) => [...current, { id: uid(), role: "user", text: `Run ${name}${summary ? `: ${summary}` : ""}` }]);
+    setState({ name: "thinking", detail: "", tool: name });
+    socket.send(JSON.stringify({ type: "tool_action", name, args, provider }));
+    return true;
+  }, []);
+
   const cancel = useCallback(() => { if (ws.current?.readyState === 1) ws.current.send(JSON.stringify({ type: "cancel" })); }, []);
   const answer = useCallback((approved) => {
     setConfirm((c) => { if (c && ws.current?.readyState === 1) ws.current.send(JSON.stringify({ type: "confirm", id: c.id, approved })); return null; });
@@ -72,5 +85,5 @@ export function useAgent(callbacks) {
 
   const busy = !["idle", "connecting"].includes(state.name);
   return { sid, messages, state, confirm, sessions, busy, connected: state.name !== "connecting",
-           send, cancel, answer, remove, newSession: () => setSid(newSessionId()), switchTo: setSid };
+           send, runTool, cancel, answer, remove, newSession: () => setSid(newSessionId()), switchTo: setSid };
 }

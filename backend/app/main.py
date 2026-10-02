@@ -157,6 +157,19 @@ def create_app(s: Settings = default_settings, agent: Agent = None, store: Store
                         task = asyncio.create_task(agent.run_turn(
                             session, text or DEFAULT_PROMPT, send, atts,
                             provider_override=provider_override, response_language=response_language))
+                elif kind == "tool_action":
+                    if agent is None:
+                        await send({"type": "error", "message": agent_error or "Agent unavailable."})
+                        continue
+                    if task and not task.done():
+                        await send({"type": "error", "message": "Still working on the previous request."})
+                        continue
+                    provider_override = msg.get("provider")
+                    if provider_override is not None and provider_override not in {"auto", "gemini", "groq", "openrouter"}:
+                        await send({"type": "error", "message": "Unknown AI provider selection."})
+                        continue
+                    task = asyncio.create_task(agent.run_tool_action(
+                        session, msg.get("name"), msg.get("args", {}), send, provider_override))
                 elif kind == "confirm":
                     session.resolve_confirmation(str(msg.get("id", "")), bool(msg.get("approved")))
                 elif kind == "cancel" and task and not task.done():

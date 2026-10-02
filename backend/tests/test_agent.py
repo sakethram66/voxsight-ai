@@ -62,6 +62,23 @@ def test_tool_loop():
     assert [e for e in ev if e["type"] == "tool"][0]["result"] == {"result": 42}
 
 
+def test_direct_tool_action_runs_without_a_model_call():
+    provider = ScriptedProvider([])
+    agent, session = Agent(provider, default_registry()), Session("direct-tool")
+    events = []
+
+    async def send(event):
+        events.append(event)
+
+    asyncio.run(agent.run_tool_action(session, "calculator", {"expression": "6*7"}, send))
+
+    tool_event = next(event for event in events if event["type"] == "tool")
+    assert tool_event["result"] == {"result": 42}
+    assert any(event["type"] == "done" for event in events)
+    assert provider.calls == []
+    assert len(session.history) == 2
+
+
 def test_confirmation_declined_and_approved():
     for approve in (False, True):
         Danger.ran = False

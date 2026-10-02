@@ -127,7 +127,9 @@ export default function App() {
   return (
     <div className="shell">
       <Sidebar open={drawer} onClose={() => setDrawer(false)} sessions={agent.sessions} sid={agent.sid} health={health}
-               onNew={agent.newSession} onPick={agent.switchTo} onDelete={agent.remove} />
+               onNew={agent.newSession} onPick={agent.switchTo} onDelete={agent.remove}
+               onRunTool={(name, args) => agent.runTool({ name, args, provider: settings.aiProvider || undefined })}
+               busy={agent.busy} connected={agent.connected} />
       <div className="main">
         <header>
           <button className="icon menu" onClick={() => setDrawer(true)} aria-label="Open sessions"><Icon name="menu" /></button>

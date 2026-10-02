@@ -56,7 +56,7 @@ class ProviderManager(LLMProvider):
     def tools_for_turn(self, tools: list) -> list:
         state = self._state()
         index = min(state.active_index, len(state.providers) - 1)
-        if not state.providers[index].capabilities.web_search:
+        if not any(provider.capabilities.web_search for provider in self.providers.values()):
             return [tool for tool in tools if tool.name != "web_search"]
         return tools
 
@@ -66,7 +66,8 @@ class ProviderManager(LLMProvider):
         start = min(state.active_index, len(state.providers) - 1)
         for index in range(start, len(state.providers)):
             provider = state.providers[index]
-            provider_tools = tools if provider.capabilities.web_search else [
+            has_search_provider = any(candidate.capabilities.web_search for candidate in self.providers.values())
+            provider_tools = tools if has_search_provider else [
                 tool for tool in tools if tool.name != "web_search"]
             reason = provider.capabilities.unsupported(messages, provider_tools)
             if not provider.capabilities.streaming:
@@ -109,16 +110,15 @@ class ProviderManager(LLMProvider):
         raise ProviderError(f"No compatible AI provider is available for this request: {detail}.")
 
     async def grounded_search(self, query: str) -> dict:
-        state = self._state()
+        providers = self._ordered("auto")
         failures = []
-        start = min(state.active_index, len(state.providers) - 1)
-        for provider in state.providers[start:]:
+        for provider in providers:
             if not provider.capabilities.web_search:
                 continue
             try:
                 return await provider.grounded_search(query)
             except ProviderError as exc:
-                failures.append(f"{provider.name} {'temporarily unavailable' if exc.transient else 'request failed'}")
+                failures.append(f"{provider.name}: {exc}")
         if failures:
             raise ProviderError("Web search failed: " + "; ".join(failures) + ".")
         raise ProviderError("Web search is not supported by the configured AI providers.")

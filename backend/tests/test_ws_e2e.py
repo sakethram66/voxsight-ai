@@ -93,6 +93,40 @@ def test_selected_language_reaches_model_prompt(tmp_path):
     assert "natural Hindi" in provider.prompts[1]
 
 
+def test_direct_tool_action_executes_calculator_without_model_call(tmp_path):
+    c, provider, _ = make([], tmp_path)
+    with c.websocket_connect(f"/ws/{SID}") as ws:
+        ws.send_json({"type": "tool_action", "name": "calculator", "args": {"expression": "6*7"}})
+        events = collect(ws)
+
+    tool = next(event for event in events if event["type"] == "tool")
+    assert tool["result"] == {"result": 42}
+    assert not provider.calls
+
+
+def test_direct_save_note_action_requires_confirmation(tmp_path):
+    c, provider, _ = make([], tmp_path)
+    note_dir = tmp_path / "notes"
+    with c.websocket_connect(f"/ws/{SID}") as ws:
+        ws.send_json({"type": "tool_action", "name": "save_note",
+                      "args": {"title": "Direct action", "content": "Saved after approval."}})
+        events = []
+        while True:
+            event = ws.receive_json()
+            events.append(event)
+            if event["type"] == "confirmation_request":
+                assert not list(note_dir.glob("*.md"))
+                ws.send_json({"type": "confirm", "id": event["id"], "approved": True})
+            if event["type"] == "status" and event["state"] == "idle" and any(
+                item["type"] in ("done", "error") for item in events
+            ):
+                break
+
+    assert len(list(note_dir.glob("*.md"))) == 1
+    assert not provider.calls
+    assert any(event["type"] == "tool" and event["result"].get("saved") for event in events)
+
+
 def test_speech_endpoint_uses_matching_telugu_and_hindi_voices(tmp_path, monkeypatch):
     calls = []
 

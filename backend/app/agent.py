@@ -1,7 +1,8 @@
 import asyncio
 import logging
+import uuid
 
-from .providers.base import (Done, LLMProvider, MediaPart, Message, ProviderError,
+from .providers.base import (Done, LLMProvider, MediaPart, Message, ProviderError, ToolCall,
                              TextDelta, ToolCallEvent, ToolResult)
 from .tools.base import ToolRegistry
 
@@ -64,6 +65,50 @@ class Agent:
     def __init__(self, provider: LLMProvider, tools: ToolRegistry, request_timeout: float = 60, tool_timeout: float = 30):
         self.provider, self.tools = provider, tools
         self.request_timeout, self.tool_timeout = request_timeout, tool_timeout
+
+    async def run_tool_action(self, session, name: str, args: dict, send, provider_override=None):
+        provider_token = None
+        try:
+            if not isinstance(args, dict):
+                raise ProviderError("Tool arguments must be an object.")
+            if not isinstance(name, str) or not name:
+                raise ProviderError("A valid tool name is required.")
+            tool = self.tools.get(name)
+            if tool is None:
+                raise ProviderError("That tool is not available.")
+            properties = tool.parameters.get("properties", {})
+            missing = [key for key in tool.parameters.get("required", []) if key not in args]
+            if missing:
+                raise ProviderError(f"Missing required tool arguments: {', '.join(missing)}.")
+            unexpected = set(args) - set(properties)
+            if unexpected:
+                raise ProviderError("Unexpected tool arguments were provided.")
+            for key, value in args.items():
+                expected = properties[key].get("type")
+                if expected == "string" and not isinstance(value, str):
+                    raise ProviderError(f"Tool argument '{key}' must be text.")
+                if isinstance(value, str) and len(value) > 16_000:
+                    raise ProviderError(f"Tool argument '{key}' is too long.")
+
+            provider_token = self.provider.begin_turn(provider_override)
+            filter_tools = getattr(self.provider, "tools_for_turn", None)
+            if filter_tools and name not in {spec.name for spec in filter_tools([tool.spec()])}:
+                raise ProviderError(f"{name} is not supported by the selected AI provider.")
+
+            request_text = f"Run {name} with {args}"
+            records = [{"role": "user", "text": request_text, "meta": {}}]
+            results = await self._run_tools(
+                session, [ToolCall(name, args, uuid.uuid4().hex)], send, records)
+            result_text = f"{name} result: {results[0].response}"
+            records.append({"role": "ai", "text": result_text, "meta": {}})
+            session.commit([Message("user", request_text), Message("model", result_text)], records)
+            await send({"type": "done"})
+        except ProviderError as exc:
+            await send({"type": "error", "message": str(exc)})
+        finally:
+            if provider_token is not None:
+                self.provider.end_turn(provider_token)
+            await send({"type": "status", "state": "idle"})
 
     async def run_turn(self, session, text: str, send, attachments=(), provider_override=None,
                        response_language="en-IN"):

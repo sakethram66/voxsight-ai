@@ -26,8 +26,10 @@ class FakeRecognition {
     this.onerror?.({ error: "aborted" });
     this.onend?.();
   }
-  result(text, isFinal = true) {
-    const item = { isFinal, 0: { transcript: text } };
+  result(text, isFinal = true, alternatives = []) {
+    const transcripts = [text, ...alternatives];
+    const item = { isFinal, length: transcripts.length };
+    transcripts.forEach((transcript, index) => { item[index] = { transcript }; });
     this.onresult?.({ resultIndex: 0, results: [item] });
   }
 }
@@ -68,6 +70,7 @@ test("recognition receives actual English, Telugu, and Hindi BCP-47 language cod
     assert.equal(recognitions[0].lang, code);
     assert.equal(recognitions[0].interimResults, true);
     assert.equal(recognitions[0].continuous, true);
+    assert.equal(recognitions[0].maxAlternatives, code === "en-IN" ? 1 : 3);
   }
 });
 
@@ -227,6 +230,32 @@ test("changing language during continuous mode restarts with the new recognition
   assert.equal(recognitions[0].abortCalls, 1);
   timers.at(-1).callback();
   assert.equal(recognitions.at(-1).lang, "hi-IN");
+});
+
+test("Hindi and Telugu choose a native-script alternative when the recognizer offers one", () => {
+  for (const [language, romanized, native] of [
+    ["te-IN", "namaskaram", "నమస్కారం"],
+    ["hi-IN", "namaste", "नमस्ते"],
+  ]) {
+    const { controller, recognitions, transcripts } = harness(language);
+    controller.start();
+    recognitions[0].result(romanized, true, [native]);
+    controller.stop({ commit: true });
+    assert.deepEqual(transcripts, [native]);
+  }
+});
+
+test("changing language clears an unfinished transcript before restarting", () => {
+  const { controller, recognitions, timers, interim, transcripts, setLanguage } = harness("en-IN");
+  controller.start({ continuous: true });
+  recognitions[0].result("unfinished English", false);
+  setLanguage("te-IN");
+  controller.changeLanguage();
+  assert.equal(interim.at(-1), "");
+  timers.at(-1).callback();
+  recognitions.at(-1).result("ఇది ఏమిటి?", true);
+  controller.noteAudioLevel(0, controller.lastVoiceAt + 2700);
+  assert.deepEqual(transcripts, ["ఇది ఏమిటి?"]);
 });
 
 test("speech errors map to useful messages and expected failures do not loop", () => {

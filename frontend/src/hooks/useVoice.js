@@ -28,15 +28,15 @@ export function useVoice({ settings, onFinal, onError, onBargeIn }) {
   const bargedIn = useRef(false), starting = useRef(false);
   const startGeneration = useRef(0);
 
-  const releaseMicrophone = () => {
+  const releaseMicrophone = useCallback(() => {
     microphone.current?.getTracks().forEach((track) => track.stop());
     audioContext.current?.close().catch(() => {});
     microphone.current = audioContext.current = null;
     controller.current?.setAudioMonitoring(false);
     setAnalyser(null);
-  };
+  }, []);
 
-  const ensureMicrophone = async () => {
+  const ensureMicrophone = useCallback(async () => {
     if (microphone.current) return;
     if (!navigator.mediaDevices?.getUserMedia) throw Object.assign(new Error("getUserMedia unavailable"), { name: "Insecure" });
     microphone.current = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
@@ -55,7 +55,7 @@ export function useVoice({ settings, onFinal, onError, onBargeIn }) {
       audioContext.current = null;
       setAnalyser(null);
     }
-  };
+  }, []);
 
   const cancelSpeech = useCallback(() => {
     speechGeneration.current++;
@@ -223,7 +223,7 @@ export function useVoice({ settings, onFinal, onError, onBargeIn }) {
     } finally {
       if (generation === startGeneration.current) starting.current = false;
     }
-  }, [cancelSpeech, speaking]);
+  }, [cancelSpeech, ensureMicrophone, releaseMicrophone, speaking]);
 
   const stop = useCallback(({ commit = false } = {}) => {
     startGeneration.current++;
@@ -231,7 +231,7 @@ export function useVoice({ settings, onFinal, onError, onBargeIn }) {
     controller.current?.stop({ commit });
     if (!commit) releaseMicrophone();
     setInterim("");
-  }, []);
+  }, [releaseMicrophone]);
 
   const responseFinished = useCallback(() => controller.current?.responseFinished(), []);
   const changeLanguage = useCallback(() => controller.current?.changeLanguage(), []);

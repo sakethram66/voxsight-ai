@@ -65,6 +65,22 @@ def test_verified_free_openrouter_model_supports_images_and_tools():
     assert provider.capabilities.unsupported([image], [ToolSpec("calculator", "math", {})]) == ""
 
 
+def test_openrouter_grounded_search_uses_web_plugin_and_parses_citations():
+    provider = OpenAICompatibleProvider("openrouter", "test-key", "openai/gpt-4o-mini", "https://example.test/v1")
+    citation = NS(url="https://example.test/result", title="Example result")
+    message = NS(content="Grounded answer", annotations=[NS(type="url_citation", url_citation=citation)])
+    request = AsyncMock(return_value=NS(choices=[NS(message=message)]))
+    provider.client = NS(chat=NS(completions=NS(create=request)))
+
+    result = asyncio.run(provider.grounded_search("current facts"))
+
+    assert request.await_args.kwargs["extra_body"] == {"plugins": [{"id": "web", "max_results": 5}]}
+    assert result == {
+        "answer": "Grounded answer",
+        "sources": [{"title": "Example result", "url": "https://example.test/result"}],
+    }
+
+
 @pytest.mark.parametrize("error_type", ["APITimeoutError", "APIConnectionError"])
 def test_openai_compatible_transport_errors_are_transient(error_type):
     provider = OpenAICompatibleProvider("openrouter", "test-key", "openai/gpt-4o-mini", "https://example.test/v1")
@@ -76,6 +92,23 @@ def test_openai_compatible_transport_errors_are_transient(error_type):
         return [event async for event in provider.stream("system", [Message("user", "hi")], [])]
 
     with pytest.raises(ProviderError, match="temporarily unavailable") as exc:
+        asyncio.run(collect())
+    assert exc.value.transient
+
+
+@pytest.mark.parametrize("name,base_url", [
+    ("groq", "https://api.groq.com/openai/v1"),
+    ("openrouter", "https://openrouter.ai/api/v1"),
+])
+def test_openai_compatible_rate_limit_is_actionable(name, base_url):
+    provider = OpenAICompatibleProvider(name, "test-key", "model", base_url)
+    error = type("RateLimitError", (Exception,), {"status_code": 429})("Provider returned error")
+    provider.client = NS(chat=NS(completions=NS(create=AsyncMock(side_effect=error))))
+
+    async def collect():
+        return [event async for event in provider.stream("system", [Message("user", "hi")], [])]
+
+    with pytest.raises(ProviderError, match="rate limit reached \(HTTP 429\)") as exc:
         asyncio.run(collect())
     assert exc.value.transient
 
@@ -133,7 +166,7 @@ def _api_error(code):
     return type("E", (Exception,), {"code": code})("temporary failure")
 
 
-@pytest.mark.parametrize("code", [429, 503])
+@pytest.mark.parametrize("code", [503])
 def test_stream_retries_transient_errors_with_exponential_backoff(code, monkeypatch):
     async def response():
         yield NS(candidates=[NS(finish_reason=None, content=NS(parts=[types.Part.from_text(text="ok")]))])
@@ -155,11 +188,26 @@ def test_stream_retries_transient_errors_with_exponential_backoff(code, monkeypa
     assert isinstance(events[-1], Done)
 
 
-@pytest.mark.parametrize("code,expected_message", [
-    (429, "Gemini rate limit or quota reached"),
-    (503, "Gemini is temporarily unavailable"),
-])
-def test_stream_exhausts_transient_retries_with_friendly_error(code, expected_message, monkeypatch):
+def test_stream_does_not_retry_quota_exhausted_429(monkeypatch):
+    g = GeminiProvider("fake-key", "m")
+    quota_error = type("E", (Exception,), {"code": 429})("RESOURCE_EXHAUSTED: quota exceeded")
+    request = AsyncMock(side_effect=quota_error)
+    g.client = NS(aio=NS(models=NS(generate_content_stream=request)))
+    sleep = AsyncMock()
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+
+    async def collect():
+        return [event async for event in g.stream("s", [Message("user", "x")], [])]
+
+    with pytest.raises(ProviderError, match="rate limit or quota reached") as exc:
+        asyncio.run(collect())
+    assert not exc.value.transient
+    request.assert_awaited_once()
+    sleep.assert_not_awaited()
+
+
+def test_stream_exhausts_transient_retries_with_friendly_error(monkeypatch):
+    code, expected_message = 503, "Gemini is temporarily unavailable"
     g = GeminiProvider("fake-key", "m")
     request = AsyncMock(side_effect=[_api_error(code) for _ in range(4)])
     g.client = NS(aio=NS(models=NS(generate_content_stream=request)))
