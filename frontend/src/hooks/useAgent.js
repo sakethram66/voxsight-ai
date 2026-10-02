@@ -52,13 +52,13 @@ export function useAgent(callbacks) {
     return () => { closed = true; clearTimeout(retry); sock?.close(); };
   }, [sid, refresh]);
 
-  const send = useCallback(({ text, files, frames, provider }) => {
+  const send = useCallback(({ text, files, frames, provider, language }) => {
     const s = ws.current;
     if (!s || s.readyState !== 1) { cb.current.onError?.("Not connected to the VoxSight server. Retrying…"); return false; }
     const images = [...files.filter((f) => f.kind === "image").map((f) => ({ url: f.url, name: f.name })),
                     ...frames.map((f) => ({ url: f.url, name: f.tag === "camera" ? "Camera frame" : "Screen frame" }))];
     setMessages((p) => [...p, { id: uid(), role: "user", text, images, chips: files.filter((f) => f.kind !== "image").map((f) => ({ name: f.name, kind: f.kind })) }]);
-    s.send(JSON.stringify({ type: "user_message", text, attachment_ids: files.map((f) => f.id), frames: frames.map(({ tag, mime, data }) => ({ tag, mime, data })), provider }));
+    s.send(JSON.stringify({ type: "user_message", text, attachment_ids: files.map((f) => f.id), frames: frames.map(({ tag, mime, data }) => ({ tag, mime, data })), provider, language }));
     return true;
   }, []);
 

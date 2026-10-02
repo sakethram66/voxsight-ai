@@ -57,6 +57,41 @@ def test_unknown_openai_compatible_model_defaults_to_text_only():
     assert provider.capabilities.unsupported([Message("user", "text")], [ToolSpec("x", "x", {})]) == "tool calling"
 
 
+def test_verified_free_openrouter_model_supports_images_and_tools():
+    provider = OpenAICompatibleProvider(
+        "openrouter", "test-key", "qwen/qwen3.8-27b:free", "https://example.test/v1")
+    image = Message("user", "describe this", media=[MediaPart("image/png", b"image")])
+
+    assert provider.capabilities.unsupported([image], [ToolSpec("calculator", "math", {})]) == ""
+
+
+@pytest.mark.parametrize("error_type", ["APITimeoutError", "APIConnectionError"])
+def test_openai_compatible_transport_errors_are_transient(error_type):
+    provider = OpenAICompatibleProvider("openrouter", "test-key", "openai/gpt-4o-mini", "https://example.test/v1")
+    error = type(error_type, (Exception,), {})("temporary connection failure")
+    request = AsyncMock(side_effect=error)
+    provider.client = NS(chat=NS(completions=NS(create=request)))
+
+    async def collect():
+        return [event async for event in provider.stream("system", [Message("user", "hi")], [])]
+
+    with pytest.raises(ProviderError, match="temporarily unavailable") as exc:
+        asyncio.run(collect())
+    assert exc.value.transient
+
+
+def test_openrouter_payment_error_is_reported_explicitly():
+    provider = OpenAICompatibleProvider("openrouter", "test-key", "openai/gpt-4o-mini", "https://example.test/v1")
+    error = type("PaymentRequiredError", (Exception,), {"status_code": 402})("payment required")
+    provider.client = NS(chat=NS(completions=NS(create=AsyncMock(side_effect=error))))
+
+    async def collect():
+        return [event async for event in provider.stream("system", [Message("user", "hi")], [])]
+
+    with pytest.raises(ProviderError, match="credits or billing"):
+        asyncio.run(collect())
+
+
 def test_conversion_labels_media_and_config():
     g = GeminiProvider("fake-key", "gemini-3.8-flash")
     msgs = [Message("user", "what is this?", media=[MediaPart("image/png", b"\x89PNG", name="Screen capture (live)")]),
@@ -194,7 +229,8 @@ def test_unsupported_auth_type_classification():
     error = type("E", (Exception,), {"code": 401})("ACCESS_TOKEN_TYPE_UNSUPPORTED")
     message = str(classify_error(error, "m"))
     assert "ACCESS_TOKEN_TYPE_UNSUPPORTED" in message
-    assert "not a Bearer token" in message
+    assert "Google AI Studio" in message
+    assert "Bearer" not in message
 
 
 def test_empty_response_is_an_error():

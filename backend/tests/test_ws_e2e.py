@@ -9,6 +9,7 @@ from app.config import Settings
 from app.main import create_app
 from app.providers.base import TextDelta, ToolCall, ToolCallEvent
 from app.providers.testing import ScriptedProvider
+from app import speech
 from app.store import Store
 from app.tools.builtin import default_registry
 from .helpers import png_bytes
@@ -67,6 +68,53 @@ def test_bad_inputs_do_not_crash_socket(tmp_path):
         assert "no longer available" in ws.receive_json()["message"]
         ws.send_json({"type": "user_message", "text": "hello"})
         assert any(e["type"] == "done" for e in collect(ws))
+
+
+def test_selected_language_reaches_model_prompt(tmp_path):
+    class RecordingProvider(ScriptedProvider):
+        def __init__(self):
+            super().__init__([[TextDelta("నమస్కారం")], [TextDelta("नमस्ते")]])
+            self.prompts = []
+
+        async def stream(self, system, messages, tools):
+            self.prompts.append(system)
+            async for event in super().stream(system, messages, tools):
+                yield event
+
+    provider = RecordingProvider()
+    s = Settings(notes_dir=str(tmp_path / "notes"))
+    app = create_app(s, agent=Agent(provider, default_registry(provider, s)), store=Store(":memory:"))
+    with TestClient(app).websocket_connect(f"/ws/{SID}") as ws:
+        for language in ("te-IN", "hi-IN"):
+            ws.send_json({"type": "user_message", "text": "hello", "language": language})
+            assert any(event["type"] == "done" for event in collect(ws))
+
+    assert "natural Telugu" in provider.prompts[0]
+    assert "natural Hindi" in provider.prompts[1]
+
+
+def test_speech_endpoint_uses_matching_telugu_and_hindi_voices(tmp_path, monkeypatch):
+    calls = []
+
+    class FakeCommunicate:
+        def __init__(self, text, voice):
+            calls.append((text, voice))
+
+        async def stream(self):
+            yield {"type": "audio", "data": b"fake-mp3"}
+
+    monkeypatch.setattr(speech.edge_tts, "Communicate", FakeCommunicate)
+    s = Settings(notes_dir=str(tmp_path / "notes"))
+    app = create_app(s, store=Store(":memory:"))
+    client = TestClient(app)
+
+    for language, text in (("te-IN", "నమస్కారం"), ("hi-IN", "नमस्ते")):
+        response = client.post("/api/speech", json={"text": text, "language": language})
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "audio/mpeg"
+        assert response.content == b"fake-mp3"
+
+    assert calls == [("నమస్కారం", "te-IN-ShrutiNeural"), ("नमस्ते", "hi-IN-SwaraNeural")]
 
 
 def note_flow(tmp_path, approve):

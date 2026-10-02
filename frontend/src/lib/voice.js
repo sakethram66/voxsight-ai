@@ -106,6 +106,7 @@ export class SpeechRecognitionController {
     this.sessionStartedAt = 0;
     this.restartTimes = [];
     this.generation = 0;
+    this.pageVisible = true;
   }
 
   get listening() { return Boolean(this.recognition); }
@@ -214,6 +215,27 @@ export class SpeechRecognitionController {
     }
   }
 
+  setPageVisible(visible) {
+    if (this.pageVisible === visible) return;
+    this.pageVisible = visible;
+    if (!visible) {
+      this._clearRestartTimer();
+      const recognition = this.recognition;
+      if (recognition) {
+        this.generation++;
+        this.recognition = null;
+        try { recognition.abort(); } catch { /* recognition may already be stopped */ }
+      }
+      if (this.enabled && !this.processing) this._state("paused");
+      return;
+    }
+    if (this.enabled && this.continuous && !this.processing && !this.speaking && !this.pausedForSpeech) {
+      this.restartTimes = [];
+      this._state("reconnecting");
+      this._scheduleRestart(0);
+    }
+  }
+
   noteAudioLevel(level, timestamp = this.now()) {
     this.audioMonitoring = true;
     if (!this.enabled || !this.continuous || this.processing || this.pausedForSpeech) return;
@@ -288,7 +310,7 @@ export class SpeechRecognitionController {
   }
 
   _open() {
-    if (!this.enabled || this.userStopped || this.recognition || this.processing || this.speaking || this.pausedForSpeech) return;
+    if (!this.pageVisible || !this.enabled || this.userStopped || this.recognition || this.processing || this.speaking || this.pausedForSpeech) return;
     const generation = ++this.generation;
     let recognition;
     try {
@@ -381,7 +403,7 @@ export class SpeechRecognitionController {
   }
 
   _scheduleRestart(delay = null) {
-    if (!this.enabled || this.userStopped || this.processing || this.speaking || this.pausedForSpeech || this.restartTimer !== null) return;
+    if (!this.pageVisible || !this.enabled || this.userStopped || this.processing || this.speaking || this.pausedForSpeech || this.restartTimer !== null) return;
     const now = this.now();
     this.restartTimes = this.restartTimes.filter((started) => now - started < 60_000);
     if (this.restartTimes.length >= 8) {

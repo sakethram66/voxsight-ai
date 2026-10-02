@@ -7,13 +7,16 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 from .agent import Agent
 from .config import Settings, settings as default_settings
 from .providers import get_provider
 from .providers.base import ProviderError
 from .session import SessionStore
+from .speech import synthesize_speech
 from .store import Store
 from .tools.builtin import default_registry
 from .uploads import UploadError, classify, frame_to_attachment
@@ -22,6 +25,12 @@ logging.basicConfig(level=logging.INFO)
 SID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 DEFAULT_PROMPT = "Please look at what I've shared and tell me what stands out."
 DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
+_RESPONSE_LANGUAGES = {"en-IN", "te-IN", "hi-IN"}
+
+
+class SpeechRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=1600)
+    language: str
 
 
 def create_app(s: Settings = default_settings, agent: Agent = None, store: Store = None) -> FastAPI:
@@ -47,6 +56,17 @@ def create_app(s: Settings = default_settings, agent: Agent = None, store: Store
             "available_providers": agent.provider.available_names if agent and hasattr(agent.provider, "available_names") else [],
             "model": s.gemini_model,
                 "tools": agent.tools.names() if agent else [], "email_enabled": s.smtp_ready}
+
+    @app.post("/api/speech")
+    async def speech(payload: SpeechRequest):
+        if payload.language not in {"te-IN", "hi-IN"}:
+            raise HTTPException(422, "Speech language must be Telugu or Hindi.")
+        try:
+            audio = await synthesize_speech(payload.text, payload.language)
+        except Exception as exc:
+            log.warning("speech synthesis failed (%s)", type(exc).__name__)
+            raise HTTPException(502, "Hindi/Telugu speech is temporarily unavailable. Check the server connection.") from exc
+        return Response(audio, media_type="audio/mpeg", headers={"Cache-Control": "no-store"})
 
     @app.get("/api/sessions")
     def list_sessions():
@@ -114,6 +134,10 @@ def create_app(s: Settings = default_settings, agent: Agent = None, store: Store
                     if provider_override is not None and provider_override not in {"auto", "gemini", "groq", "openrouter"}:
                         await send({"type": "error", "message": "Unknown AI provider selection."})
                         continue
+                    response_language = msg.get("language", "en-IN")
+                    if response_language not in _RESPONSE_LANGUAGES:
+                        await send({"type": "error", "message": "Unknown response language selection."})
+                        continue
                     text = str(msg.get("text") or "").strip()
                     ids, frames = msg.get("attachment_ids") or [], msg.get("frames") or []
                     try:
@@ -132,7 +156,7 @@ def create_app(s: Settings = default_settings, agent: Agent = None, store: Store
                     if text or atts:
                         task = asyncio.create_task(agent.run_turn(
                             session, text or DEFAULT_PROMPT, send, atts,
-                            provider_override=provider_override))
+                            provider_override=provider_override, response_language=response_language))
                 elif kind == "confirm":
                     session.resolve_confirmation(str(msg.get("id", "")), bool(msg.get("approved")))
                 elif kind == "cancel" and task and not task.done():

@@ -2,6 +2,8 @@ import asyncio
 import os
 from importlib.metadata import version
 
+import httpx
+
 from app.config import BASE, settings
 from google import genai
 
@@ -41,6 +43,25 @@ def report_error(exc: Exception) -> None:
 
 
 async def probe(client: genai.Client) -> None:
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{settings.gemini_model}:generateContent"
+    payload = {"contents": [{"parts": [{"text": "Reply only: OK"}]}]}
+    async with httpx.AsyncClient(timeout=20) as http:
+        for label, headers in (
+            ("x-goog-api-key", {"x-goog-api-key": settings.gemini_api_key}),
+            ("authorization-bearer", {"Authorization": f"Bearer {settings.gemini_api_key}"}),
+        ):
+            try:
+                response = await http.post(url, headers=headers, json=payload)
+                print(f"HEADER_PROBE_{label.upper().replace('-', '_')}_HTTP_STATUS={response.status_code}")
+                if response.is_success:
+                    continue
+                error = response.json().get("error", {})
+                message = str(error.get("message", "unavailable"))
+                message = message.replace(settings.gemini_api_key, "[REDACTED]")
+                print(f"HEADER_PROBE_{label.upper().replace('-', '_')}_ERROR_STATUS={error.get('status', 'unavailable')}")
+                print(f"HEADER_PROBE_{label.upper().replace('-', '_')}_ERROR_MESSAGE={message[:240]}")
+            except Exception as exc:
+                print(f"HEADER_PROBE_{label.upper().replace('-', '_')}_ERROR_TYPE={type(exc).__name__}")
     try:
         await client.aio.models.generate_content(
             model=settings.gemini_model,

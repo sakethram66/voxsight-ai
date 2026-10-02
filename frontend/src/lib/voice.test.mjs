@@ -137,6 +137,24 @@ test("unexpected onend restarts finitely with bounded backoff", () => {
   assert.equal(controller.enabled, false);
 });
 
+test("background tab pauses continuous recognition and resumes without spending retries", () => {
+  const { controller, recognitions, timers, states } = harness("hi-IN");
+  controller.start({ continuous: true });
+
+  controller.setPageVisible(false);
+  assert.equal(recognitions[0].abortCalls, 1);
+  assert.equal(controller.enabled, true);
+  assert.equal(controller.userStopped, false);
+  assert.equal(timers.length, 0);
+  assert.equal(states.at(-1), "paused");
+
+  controller.setPageVisible(true);
+  assert.equal(timers.at(-1).delay, 0);
+  timers.at(-1).callback();
+  assert.equal(recognitions.length, 2);
+  assert.equal(recognitions[1].lang, "hi-IN");
+});
+
 test("natural pauses keep one draft and interim text alone is never submitted", () => {
   const { controller, recognitions, interim, transcripts } = harness();
   controller.start({ continuous: true });

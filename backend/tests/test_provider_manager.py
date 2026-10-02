@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -74,6 +75,18 @@ def test_groq_failure_falls_through_to_openrouter():
     assert events[0].text == "openrouter"
 
 
+def test_last_provider_retries_one_transient_transport_failure(monkeypatch):
+    provider = FakeProvider("openrouter", [ProviderError("connection timed out", transient=True)])
+    sleep = AsyncMock()
+    monkeypatch.setattr("app.providers.manager.asyncio.sleep", sleep)
+
+    events = run_stream(ProviderManager({"openrouter": provider}))
+
+    assert events[0].text == "openrouter"
+    assert len(provider.calls) == 2
+    sleep.assert_awaited_once_with(0.25)
+
+
 def test_all_provider_failures_are_clear_and_do_not_leak_error_payloads():
     providers = {name: FakeProvider(name, [ProviderError("request failed")])
                  for name in ("gemini", "groq", "openrouter")}
@@ -114,6 +127,20 @@ def test_image_is_only_sent_to_vision_capable_provider():
     events = run_stream(ProviderManager({"gemini": gemini, "groq": groq}), [image])
     assert events[0].text == "groq"
     assert not gemini.calls and len(groq.calls) == 1
+
+
+def test_image_falls_back_to_vision_capable_openrouter():
+    from app.providers.base import MediaPart
+    image = Message("user", "describe", media=[MediaPart("image/png", b"image")])
+    gemini = FakeProvider("gemini", [ProviderError("quota", transient=True)],
+                          capabilities=ProviderCapabilities(vision=True, tools=True))
+    groq = FakeProvider("groq", capabilities=ProviderCapabilities(tools=True))
+    router = FakeProvider("openrouter", capabilities=ProviderCapabilities(vision=True, tools=True))
+
+    events = run_stream(ProviderManager({"gemini": gemini, "groq": groq, "openrouter": router}), [image])
+
+    assert events[0].text == "openrouter"
+    assert len(gemini.calls) == 1 and not groq.calls and len(router.calls) == 1
 
 
 def test_unsupported_pdf_is_never_sent_to_text_only_fallbacks():

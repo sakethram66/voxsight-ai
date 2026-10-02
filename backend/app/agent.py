@@ -7,6 +7,11 @@ from .tools.base import ToolRegistry
 
 log = logging.getLogger("voxsight.agent")
 MAX_STEPS = 6
+_RESPONSE_LANGUAGE_PROMPTS = {
+    "en-IN": "Respond in natural English.",
+    "te-IN": "Respond in natural Telugu (తెలుగు script). Keep the answer concise and conversational.",
+    "hi-IN": "Respond in natural Hindi (देवनागरी script). Keep the answer concise and conversational.",
+}
 
 SYSTEM_PROMPT = """You are VoxSight AI, a real-time voice and multimodal assistant. The user talks to you
 and can show you things; you hear, see, understand, and act.
@@ -60,7 +65,8 @@ class Agent:
         self.provider, self.tools = provider, tools
         self.request_timeout, self.tool_timeout = request_timeout, tool_timeout
 
-    async def run_turn(self, session, text: str, send, attachments=(), provider_override=None):
+    async def run_turn(self, session, text: str, send, attachments=(), provider_override=None,
+                       response_language="en-IN"):
         """One user turn: fuse -> model -> tools -> model ... History is committed only if the turn
         completes, so a cancel/failure never leaves a dangling tool call in memory."""
         turn = [build_user_message(text, attachments)]
@@ -76,7 +82,7 @@ class Agent:
                 first = step == 0 and detail
                 await send({"type": "status", "state": "analyzing" if first else "thinking",
                             "detail": detail if first else ""})
-                buf, calls, raw = await self._call_model(session, turn, send)
+                buf, calls, raw = await self._call_model(session, turn, send, response_language)
                 if buf:
                     records.append({"role": "ai", "text": buf, "meta": {}})
                 turn.append(Message("model", buf, tool_calls=calls, raw=raw))
@@ -98,7 +104,7 @@ class Agent:
                 self.provider.end_turn(provider_token)
             await send({"type": "status", "state": "idle"})
 
-    async def _call_model(self, session, turn, send):
+    async def _call_model(self, session, turn, send, response_language="en-IN"):
         for attempt in (0, 1):
             buf, calls, raw, started = "", [], None, False
             try:
@@ -107,7 +113,9 @@ class Agent:
                     filter_tools = getattr(self.provider, "tools_for_turn", None)
                     if filter_tools:
                         specs = filter_tools(specs)
-                    async for ev in self.provider.stream(SYSTEM_PROMPT, session.model_history(turn), specs):
+                    language_prompt = _RESPONSE_LANGUAGE_PROMPTS.get(response_language, _RESPONSE_LANGUAGE_PROMPTS["en-IN"])
+                    system = f"{SYSTEM_PROMPT}\n\nResponse language: {language_prompt}"
+                    async for ev in self.provider.stream(system, session.model_history(turn), specs):
                         if isinstance(ev, TextDelta):
                             if not started:
                                 await send({"type": "status", "state": "generating"})

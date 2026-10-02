@@ -15,6 +15,7 @@ _GROQ_MODELS = {
 _OPENROUTER_MODELS = {
     "openai/gpt-4.1-mini": ProviderCapabilities(vision=True, streaming=True, tools=True),
     "openai/gpt-4o-mini": ProviderCapabilities(vision=True, streaming=True, tools=True),
+    "qwen/qwen3.8-27b:free": ProviderCapabilities(vision=True, streaming=True, tools=True),
     "anthropic/claude-sonnet-4.5": ProviderCapabilities(vision=True, streaming=True, tools=True),
     "google/gemini-3.8-flash": ProviderCapabilities(vision=True, streaming=True, tools=True),
 }
@@ -119,8 +120,14 @@ class OpenAICompatibleProvider(LLMProvider):
             raise
         except Exception as exc:
             status = getattr(exc, "status_code", None)
+            error_type = type(exc).__name__
+            if status == 402:
+                raise ProviderError(f"{self.name} requires credits or billing (HTTP 402).") from exc
             if status == 429 or (isinstance(status, int) and status >= 500):
                 raise ProviderError(f"{self.name} is temporarily unavailable.", transient=True) from exc
             if status in (400, 401, 403, 404):
                 raise ProviderError(f"{self.name} rejected the request (HTTP {status}).") from exc
+            if (isinstance(exc, (TimeoutError, ConnectionError, OSError)) or
+                    error_type in {"APITimeoutError", "APIConnectionError"}):
+                raise ProviderError(f"{self.name} is temporarily unavailable.", transient=True) from exc
             raise ProviderError(f"{self.name} request failed.") from exc

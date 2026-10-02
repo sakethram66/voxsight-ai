@@ -14,6 +14,11 @@ test("does not split decimals or list numbers", () => {
   assert.deepEqual(c.push("Pi is 3.14 roughly. "), ["Pi is 3.14 roughly."]);
   assert.deepEqual(c.push("1. Open the file\n"), ["1. Open the file"]);
 });
+test("splits Telugu and Hindi danda sentence boundaries", () => {
+  const c = new SentenceChunker();
+  assert.deepEqual(c.push("నమస్కారం। "), ["నమస్కారం।"]);
+  assert.deepEqual(c.push("नमस्ते। "), ["नमस्ते।"]);
+});
 test("code blocks are skipped, even when split across deltas", () => {
   const c = new SentenceChunker();
   let out = [...c.push("Try this. ```py\nprint(1"), ...c.push(")\n``` Then rerun it.")];

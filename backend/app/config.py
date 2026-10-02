@@ -15,7 +15,7 @@ class Settings:
     groq_api_key: str = os.getenv("GROQ_API_KEY", "")
     groq_model: str = os.getenv("GROQ_MODEL", "") or "openai/gpt-oss-120b"
     openrouter_api_key: str = os.getenv("OPENROUTER_API_KEY", "")
-    openrouter_model: str = os.getenv("OPENROUTER_MODEL", "") or "openai/gpt-4.1-mini"
+    openrouter_model: str = os.getenv("OPENROUTER_MODEL", "") or "qwen/qwen3.8-27b:free"
     cors_origins: tuple = tuple(o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(","))
     db_path: str = os.getenv("VOXSIGHT_DB", str(BASE / "data" / "voxsight.db"))
     notes_dir: str = os.getenv("VOXSIGHT_NOTES_DIR", str(BASE / "data" / "notes"))

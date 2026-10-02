@@ -13,7 +13,7 @@ export function cleanForSpeech(t) {
 }
 
 function takeSentences(s) {
-  const out = [], re = /[.!?](?=\s)|\n/g;
+  const out = [], re = /[.!?।](?=\s)|\n/g;
   let start = 0, m;
   while ((m = re.exec(s))) {
     if (m[0] === "." && /^\s*\d+$/.test(s.slice(start, m.index))) continue; // "1." list numbering

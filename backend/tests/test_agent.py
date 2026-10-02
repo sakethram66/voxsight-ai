@@ -17,12 +17,12 @@ class Danger(Tool):
         return {"ok": True}
 
 
-def run(agent, session, text="hi", on_event=None):
+def run(agent, session, text="hi", on_event=None, response_language="en-IN"):
     events = []
     async def send(e):
         events.append(e)
         if on_event: await on_event(e)
-    asyncio.run(agent.run_turn(session, text, send))
+    asyncio.run(agent.run_turn(session, text, send, response_language=response_language))
     return events
 
 
@@ -32,6 +32,28 @@ def test_text_stream_and_memory():
     ev = run(a, s, "one"); run(a, s, "two")
     assert "".join(e["text"] for e in ev if e["type"] == "delta") == "Hello"
     assert len(s.history) == 4 and len(p.calls[1]) == 3
+
+
+def test_selected_response_language_is_applied_to_model_prompt():
+    class RecordingProvider(ScriptedProvider):
+        def __init__(self):
+            super().__init__([[TextDelta("నమస్కారం")], [TextDelta("नमस्ते")]])
+            self.prompts = []
+
+        async def stream(self, system, messages, tools):
+            self.prompts.append(system)
+            async for event in super().stream(system, messages, tools):
+                yield event
+
+    provider = RecordingProvider()
+    agent = Agent(provider, default_registry())
+    run(agent, Session("te"), response_language="te-IN")
+    run(agent, Session("hi"), response_language="hi-IN")
+
+    assert "natural Telugu" in provider.prompts[0]
+    assert "తెలుగు" in provider.prompts[0]
+    assert "natural Hindi" in provider.prompts[1]
+    assert "देवनागरी" in provider.prompts[1]
 
 
 def test_tool_loop():

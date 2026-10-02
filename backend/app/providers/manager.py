@@ -1,3 +1,4 @@
+import asyncio
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 
@@ -75,24 +76,32 @@ class ProviderManager(LLMProvider):
                 state.active_index = index + 1
                 continue
 
-            emitted = False
-            try:
-                async for event in provider.stream(system, messages, provider_tools):
-                    if isinstance(event, (TextDelta, ToolCallEvent)):
-                        emitted = True
-                    yield event
-                state.active_index = index
-                return
-            except ProviderError as exc:
-                if emitted:
-                    raise
-                failed.append(f"{provider.name}: {exc}")
-                state.active_index = index + 1
-            except Exception:
-                if emitted:
-                    raise ProviderError(f"{provider.name} failed after streaming began; no fallback was attempted.")
-                failed.append(f"{provider.name} request failed")
-                state.active_index = index + 1
+            attempt = 0
+            while True:
+                emitted = False
+                try:
+                    async for event in provider.stream(system, messages, provider_tools):
+                        if isinstance(event, (TextDelta, ToolCallEvent)):
+                            emitted = True
+                        yield event
+                    state.active_index = index
+                    return
+                except ProviderError as exc:
+                    if emitted:
+                        raise
+                    if provider.name in {"groq", "openrouter"} and exc.transient and attempt == 0:
+                        attempt += 1
+                        await asyncio.sleep(0.25)
+                        continue
+                    failed.append(f"{provider.name}: {exc}")
+                    state.active_index = index + 1
+                    break
+                except Exception:
+                    if emitted:
+                        raise ProviderError(f"{provider.name} failed after streaming began; no fallback was attempted.")
+                    failed.append(f"{provider.name} request failed")
+                    state.active_index = index + 1
+                    break
 
         if failed:
             raise ProviderError("All compatible AI providers failed: " + "; ".join(failed) + ".")

@@ -21,9 +21,9 @@ def classify_error(e: Exception, model: str) -> ProviderError:
     code, text = getattr(e, "code", None), str(e)
     short = text[:200]
     if "ACCESS_TOKEN_TYPE_UNSUPPORTED" in text:
-        return ProviderError("Gemini rejected the API-key request (ACCESS_TOKEN_TYPE_UNSUPPORTED). "
-                             "VoxSight sends GEMINI_API_KEY as x-goog-api-key, not a Bearer token; "
-                             "check the key's Gemini API authorization and restrictions.")
+        return ProviderError("Google rejected GEMINI_API_KEY (ACCESS_TOKEN_TYPE_UNSUPPORTED). "
+                             "Verify the key is active in Google AI Studio and permitted for the "
+                             "Gemini API, then update backend/.env if it is not.")
     if code in (401, 403) or "API key not valid" in text:
         return ProviderError("Gemini rejected the API key. Check GEMINI_API_KEY in backend/.env.")
     if code == 404:
